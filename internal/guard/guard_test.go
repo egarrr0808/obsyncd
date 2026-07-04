@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeController struct{ paths []string }
@@ -60,6 +61,36 @@ func TestDetectRemoteOverwriteClearsEqualSnapshot(t *testing.T) {
 	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
 		t.Fatalf("snapshot still exists or stat failed: %v", err)
 	}
+}
+
+func TestDetectRemoteOverwriteDropsStaleSnapshot(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("local edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}, MaxSnapshotAge: time.Millisecond}
+	if err := g.snapshotLocal("note.md"); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(g.snapshotPath("note.md"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("remote edit\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.detectRemoteOverwrite(context.Background(), "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
+		t.Fatalf("stale snapshot still exists or stat failed: %v", err)
+	}
+	if _, err := os.Stat(strings.TrimSuffix(path, ".md") + ".local-v1.md"); !os.IsNotExist(err) {
+		t.Fatalf("unexpected conflict copy: %v", err)
+	}
+	mustContain(t, path, "remote edit\n")
 }
 
 func mustContain(t *testing.T, path, want string) {

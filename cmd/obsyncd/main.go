@@ -10,12 +10,17 @@ import (
 	"syscall"
 
 	"obsyncd/internal/core"
+	"obsyncd/internal/update"
 )
 
 func main() {
 	defaultConfig := filepath.Join(os.Getenv("HOME"), ".config", "obsyncd", "config.yaml")
 	configPath := flag.String("config", defaultConfig, "path to obsyncd YAML config")
 	flag.Parse()
+
+	if err := update.MaybeRelaunch("obsyncd", os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "obsyncd update skipped:", err)
+	}
 
 	if flag.NArg() > 0 && flag.Arg(0) == "id" {
 		id, err := core.DeviceID(*configPath)

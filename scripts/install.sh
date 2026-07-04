@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-PREFIX="${PREFIX:-/usr/local}"
+PREFIX="${PREFIX:-$HOME/.local}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obsyncd"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
 SRC_DIR="${OBSYNCD_SRC_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
@@ -25,6 +25,7 @@ fi
 go build -tags noassets -o obsyncd ./cmd/obsyncd
 go build -tags noassets -o obsyncctl ./cmd/obsyncctl
 
+mkdir -p "$PREFIX/bin"
 if [ -w "$PREFIX/bin" ]; then
 	install -m 0755 obsyncd "$PREFIX/bin/obsyncd"
 	install -m 0755 obsyncctl "$PREFIX/bin/obsyncctl"
@@ -53,6 +54,7 @@ cat <<MSG
 obsyncd installed.
 
 Next:
+  0. Add $PREFIX/bin to PATH if needed
   1. Edit $CONFIG_FILE
   2. Get this machine ID: obsyncd -config $CONFIG_FILE id
   3. Run daemon: obsyncd -config $CONFIG_FILE

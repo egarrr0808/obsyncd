@@ -17,8 +17,10 @@ The installer does not clone or pull the repo. It only builds the source tree it
 The installer:
 
 - builds `obsyncd` and `obsyncctl` with `-tags noassets`
-- installs both into `/usr/local/bin`
+- installs both into `~/.local/bin` by default
 - creates `~/.config/obsyncd/config.yaml` if missing
+
+Use `PREFIX=/usr/local ./scripts/install.sh` only if you do not need self-update, or if that directory is writable by the daemon user.
 
 ## Config
 
@@ -56,6 +58,8 @@ obsyncctl
 ```
 
 `obsyncctl` without a command opens the conflict-resolution TUI.
+
+On startup, both `obsyncd` and `obsyncctl` try a best-effort self-update from `~/obsyncd` or `OBSYNCD_SRC_DIR`. If `origin/main` changed, they pull, rebuild both binaries into the current writable install dir or `OBSYNCD_INSTALL_DIR`, then relaunch once. Set `OBSYNCD_NO_UPDATE=1` to disable this.
 
 ## Server Firewall
 

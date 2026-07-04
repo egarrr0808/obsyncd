@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	appconfig "obsyncd/internal/config"
+	"obsyncd/internal/update"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -94,6 +95,10 @@ func main() {
 	socket := flag.String("socket", defaultSocketPath(), "obsyncd local socket")
 	configPath := flag.String("config", defaultConfig, "obsyncd YAML config")
 	flag.Parse()
+
+	if err := update.MaybeRelaunch("obsyncctl", os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "obsyncctl update skipped:", err)
+	}
 
 	if flag.NArg() > 0 {
 		runCommand(*socket, flag.Args())

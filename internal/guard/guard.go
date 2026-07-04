@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"obsyncd/internal/diffmerge"
 
@@ -22,11 +23,12 @@ type Controller interface {
 }
 
 type Guard struct {
-	Root       string
-	StateDir   string
-	Folder     string
-	Logger     stevents.Logger
-	Controller Controller
+	Root           string
+	StateDir       string
+	Folder         string
+	Logger         stevents.Logger
+	Controller     Controller
+	MaxSnapshotAge time.Duration
 
 	mu sync.Mutex
 }
@@ -96,6 +98,12 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 	defer g.mu.Unlock()
 
 	snapPath := g.snapshotPath(rel)
+	if stale, err := g.snapshotStale(snapPath); err != nil {
+		return err
+	} else if stale {
+		_ = os.Remove(snapPath)
+		return nil
+	}
 	localBefore, err := os.ReadFile(snapPath)
 	if os.IsNotExist(err) {
 		return nil
@@ -174,6 +182,24 @@ func (g *Guard) snapshotDir() string {
 func (g *Guard) snapshotPath(rel string) string {
 	sum := sha256.Sum256([]byte(filepath.ToSlash(filepath.Clean(rel))))
 	return filepath.Join(g.snapshotDir(), hex.EncodeToString(sum[:])+".snap")
+}
+
+func (g *Guard) snapshotStale(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return time.Since(info.ModTime()) > g.snapshotAge(), nil
+}
+
+func (g *Guard) snapshotAge() time.Duration {
+	if g.MaxSnapshotAge > 0 {
+		return g.MaxSnapshotAge
+	}
+	return 10 * time.Minute
 }
 
 func copyPaths(path string) (string, string) {
