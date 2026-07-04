@@ -33,6 +33,27 @@ type Paths struct {
 	StateDir   string
 }
 
+func DeviceID(configFile string) (string, error) {
+	paths, err := resolvePaths(configFile)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+		return "", err
+	}
+	if err := locations.SetBaseDir(locations.ConfigBaseDir, paths.StateDir); err != nil {
+		return "", err
+	}
+	if err := locations.SetBaseDir(locations.DataBaseDir, paths.StateDir); err != nil {
+		return "", err
+	}
+	cert, err := syncthing.LoadOrGenerateCertificate(locations.Get(locations.CertFile), locations.Get(locations.KeyFile))
+	if err != nil {
+		return "", fmt.Errorf("certificate: %w", err)
+	}
+	return syncthingDeviceID(cert).String(), nil
+}
+
 func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	appCfg, err := appconfig.Load(configFile)
 	if err != nil {
@@ -53,22 +74,30 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	}
 
 	evLogger := events.NewLogger()
+	loggerCtx, loggerCancel := context.WithCancel(ctx)
+	go func() {
+		_ = evLogger.Serve(loggerCtx)
+	}()
 	cert, err := syncthing.LoadOrGenerateCertificate(locations.Get(locations.CertFile), locations.Get(locations.KeyFile))
 	if err != nil {
+		loggerCancel()
 		return nil, fmt.Errorf("certificate: %w", err)
 	}
 	myID := syncthingDeviceID(cert)
 
 	stCfg, err := appconfig.BuildSyncthingConfig(appCfg, myID, locations.Get(locations.ConfigFile), evLogger)
 	if err != nil {
+		loggerCancel()
 		return nil, err
 	}
 	if err := stCfg.Save(); err != nil {
+		loggerCancel()
 		return nil, fmt.Errorf("save syncthing config: %w", err)
 	}
 
 	db, err := backend.Open(locations.Get(locations.Database), backend.TuningSmall)
 	if err != nil {
+		loggerCancel()
 		return nil, fmt.Errorf("open syncthing db: %w", err)
 	}
 	app, err := syncthing.New(stCfg, db, evLogger, cert, syncthing.Options{
@@ -76,19 +105,23 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	})
 	if err != nil {
 		_ = db.Close()
+		loggerCancel()
 		return nil, err
 	}
 	if err := app.Start(); err != nil {
+		loggerCancel()
 		return nil, err
 	}
 	oracleID, oracleName, err := oracleDevice(appCfg)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
+		loggerCancel()
 		return nil, err
 	}
 	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
+		loggerCancel()
 		return nil, err
 	}
 	d := &Daemon{
@@ -101,6 +134,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	go func() {
 		<-ctx.Done()
 		app.Stop(svcutil.ExitSuccess)
+		loggerCancel()
 	}()
 	return d, nil
 }

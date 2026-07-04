@@ -70,9 +70,12 @@ func (c File) Validate() error {
 		if strings.TrimSpace(node.Address) == "" {
 			return fmt.Errorf("remote_nodes[%d].address is required", idx)
 		}
+		if node.Address == "dynamic" {
+			continue
+		}
 		u, err := url.Parse(node.Address)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("remote_nodes[%d].address must be scheme://host:port", idx)
+			return fmt.Errorf("remote_nodes[%d].address must be dynamic or scheme://host:port", idx)
 		}
 	}
 	return nil

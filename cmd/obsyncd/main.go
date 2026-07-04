@@ -17,6 +17,16 @@ func main() {
 	configPath := flag.String("config", defaultConfig, "path to obsyncd YAML config")
 	flag.Parse()
 
+	if flag.NArg() > 0 && flag.Arg(0) == "id" {
+		id, err := core.DeviceID(*configPath)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println(id)
+		return
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
