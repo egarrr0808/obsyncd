@@ -91,6 +91,49 @@ func TestStageIsIdempotentForExistingPending(t *testing.T) {
 	}
 }
 
+func TestResolveDeletedCanonicalKeepLocalDeletion(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-REMOTE.md")
+	mustWrite(t, artifact, "remote\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "local"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("canonical exists or stat failed: %v", err)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending remains: %#v", pending)
+	}
+}
+
+func TestResolveDeletedCanonicalRestoreRemote(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-REMOTE.md")
+	mustWrite(t, artifact, "remote\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "remote"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "remote\n" {
+		t.Fatalf("canonical = %q", got)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

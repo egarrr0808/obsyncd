@@ -123,7 +123,8 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 		return "", err
 	}
 	local, err := os.ReadFile(canonicalPath)
-	if err != nil {
+	localMissing := os.IsNotExist(err)
+	if err != nil && !localMissing {
 		return "", err
 	}
 	remote, err := os.ReadFile(stagedPath)
@@ -137,6 +138,10 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 	case "remote":
 		next = remote
 	case "submerge":
+		if localMissing {
+			next = remote
+			break
+		}
 		next = append(append([]byte(nil), local...), joiner(string(local), string(remote))...)
 		next = append(next, remote...)
 	case "manual":
@@ -144,7 +149,10 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 	default:
 		return "", fmt.Errorf("unknown resolution action: %s", action)
 	}
-	if action != "manual" {
+	if action == "local" && localMissing {
+		_ = os.Remove(canonicalPath)
+		_ = os.Remove(s.basePath(canonicalRel))
+	} else if action != "manual" {
 		if err := atomicWrite(canonicalPath, next, 0o644); err != nil {
 			return "", err
 		}

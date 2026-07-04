@@ -300,7 +300,9 @@ func (m model) View() string {
 func (m model) diffView() string {
 	file := m.files[m.cursor]
 	localBytes, err := os.ReadFile(file.Path)
-	if err != nil {
+	if os.IsNotExist(err) {
+		localBytes = []byte("[deleted locally]\n")
+	} else if err != nil {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
 	remoteBytes, err := os.ReadFile(file.Staged)
