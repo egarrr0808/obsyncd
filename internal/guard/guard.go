@@ -20,6 +20,7 @@ import (
 )
 
 type Controller interface {
+	Pause(ctx context.Context, folder string) error
 	Rescan(ctx context.Context, folder string, paths []string) error
 }
 
@@ -70,7 +71,7 @@ func (g *Guard) Run(ctx context.Context) error {
 			}
 			switch ev.Type {
 			case stevents.LocalChangeDetected:
-				if err := g.snapshotLocal(path); err != nil {
+				if err := g.snapshotLocal(ctx, path); err != nil {
 					log.Printf("obsyncd conflict guard snapshot failed for %s: %v", path, err)
 				}
 			case stevents.ItemFinished:
@@ -121,7 +122,7 @@ func (g *Guard) RunSnapshotScanner(ctx context.Context, interval time.Duration) 
 					}
 					continue
 				}
-				if err := g.snapshotLocal(rel); err != nil {
+				if err := g.snapshotLocal(ctx, rel); err != nil {
 					log.Printf("obsyncd conflict guard snapshot failed for %s: %v", rel, err)
 				}
 			}
@@ -179,7 +180,7 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	return g.Controller.Rescan(ctx, g.Folder, []string{rel})
 }
 
-func (g *Guard) snapshotLocal(rel string) error {
+func (g *Guard) snapshotLocal(ctx context.Context, rel string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -194,7 +195,14 @@ func (g *Guard) snapshotLocal(rel string) error {
 	if strings.Contains(string(bs), "%%OBSYNCD_CONFLICT_START%%") {
 		return nil
 	}
-	return atomicWrite(g.snapshotPath(rel), bs, 0o600)
+	if err := atomicWrite(g.snapshotPath(rel), bs, 0o600); err != nil {
+		return err
+	}
+	if g.Controller != nil {
+		log.Printf("OBSYNCD HOLD: %s changed locally; sync paused, run obsyncctl to approve", rel)
+		return g.Controller.Pause(ctx, g.Folder)
+	}
+	return nil
 }
 
 func (g *Guard) scanHashes() (map[string]string, error) {

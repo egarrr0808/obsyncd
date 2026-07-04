@@ -13,6 +13,8 @@ import (
 
 type fakeController struct{ paths []string }
 
+func (f *fakeController) Pause(context.Context, string) error { return nil }
+
 func (f *fakeController) Rescan(_ context.Context, _ string, paths []string) error {
 	f.paths = append(f.paths, paths...)
 	return nil
@@ -47,7 +49,7 @@ func TestDetectRemoteOverwriteCreatesCopiesAndMarker(t *testing.T) {
 	}
 	ctrl := &fakeController{}
 	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: ctrl}
-	if err := g.snapshotLocal("note.md"); err != nil {
+	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("remote edit\n"), 0o644); err != nil {
@@ -74,7 +76,7 @@ func TestDetectRemoteOverwriteClearsEqualSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}}
-	if err := g.snapshotLocal("note.md"); err != nil {
+	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
 		t.Fatal(err)
 	}
 	if err := g.detectRemoteOverwrite(context.Background(), "note.md"); err != nil {
@@ -93,7 +95,7 @@ func TestDetectRemoteOverwriteDropsStaleSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}, MaxSnapshotAge: time.Millisecond}
-	if err := g.snapshotLocal("note.md"); err != nil {
+	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
 		t.Fatal(err)
 	}
 	old := time.Now().Add(-time.Hour)

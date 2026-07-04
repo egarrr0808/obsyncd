@@ -11,12 +11,14 @@ import (
 
 	"obsyncd/internal/statestore"
 
+	stconfig "github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/syncthing"
 )
 
 type Server struct {
 	app      *syncthing.App
+	cfg      stconfig.Wrapper
 	folderID string
 	oracleID protocol.DeviceID
 	oracle   string
@@ -37,7 +39,7 @@ func DefaultSocketPath() string {
 	return filepath.Join(dir, "obsyncd", "obsyncd.sock")
 }
 
-func Start(ctx context.Context, socket string, app *syncthing.App, folderID, root string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
+func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.Wrapper, folderID, root string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
 	if socket == "" {
 		socket = DefaultSocketPath()
 	}
@@ -59,6 +61,7 @@ func Start(ctx context.Context, socket string, app *syncthing.App, folderID, roo
 
 	s := &Server{
 		app:      app,
+		cfg:      cfg,
 		folderID: folderID,
 		oracleID: oracleID,
 		oracle:   oracleName,
@@ -127,8 +130,30 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 	if err := s.app.Internals.ScanFolderSubdirs(s.folderID, []string{path}); err != nil {
 		return err
 	}
+	if pending := s.pendingConflicts(); len(pending) == 0 {
+		_ = s.setPaused(false)
+	}
 	*reply = ResolveReply{Path: path, OK: true}
 	return nil
+}
+
+func (s *Server) setPaused(paused bool) error {
+	if s.cfg == nil {
+		return nil
+	}
+	waiter, err := s.cfg.Modify(func(cfg *stconfig.Configuration) {
+		fcfg, _, ok := cfg.Folder(s.folderID)
+		if !ok || fcfg.Paused == paused {
+			return
+		}
+		fcfg.Paused = paused
+		cfg.SetFolder(fcfg)
+	})
+	if err != nil {
+		return err
+	}
+	waiter.Wait()
+	return s.cfg.Save()
 }
 
 func (s *Server) manualConflicts() []string {

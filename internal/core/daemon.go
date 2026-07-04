@@ -16,6 +16,7 @@ import (
 	"obsyncd/internal/ipc"
 	"obsyncd/internal/statestore"
 
+	stconfig "github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/db/backend"
 	"github.com/syncthing/syncthing/lib/events"
 	"github.com/syncthing/syncthing/lib/locations"
@@ -39,10 +40,33 @@ type Paths struct {
 
 type appController struct {
 	app *syncthing.App
+	cfg stconfig.Wrapper
 }
 
-func (c appController) Pause(context.Context, string) error  { return nil }
-func (c appController) Resume(context.Context, string) error { return nil }
+func (c appController) Pause(_ context.Context, folder string) error {
+	return c.setPaused(folder, true)
+}
+
+func (c appController) Resume(_ context.Context, folder string) error {
+	return c.setPaused(folder, false)
+}
+
+func (c appController) setPaused(folder string, paused bool) error {
+	waiter, err := c.cfg.Modify(func(cfg *stconfig.Configuration) {
+		fcfg, _, ok := cfg.Folder(folder)
+		if !ok || fcfg.Paused == paused {
+			return
+		}
+		fcfg.Paused = paused
+		cfg.SetFolder(fcfg)
+	})
+	if err != nil {
+		return err
+	}
+	waiter.Wait()
+	return c.cfg.Save()
+}
+
 func (c appController) Rescan(_ context.Context, folder string, paths []string) error {
 	return c.app.Internals.ScanFolderSubdirs(folder, paths)
 }
@@ -143,7 +167,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, err
 	}
-	controller := appController{app: app}
+	controller := appController{app: app, cfg: stCfg}
 	store := statestore.New(appCfg.VaultPath)
 	conflictGuard := &guard.Guard{
 		Root:       appCfg.VaultPath,
@@ -189,7 +213,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		}
 	}()
 
-	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, appCfg.VaultPath, store, oracleID, oracleName)
+	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, store, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
 		cfgCancel()
