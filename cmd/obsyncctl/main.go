@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -119,7 +120,7 @@ func main() {
 	}
 
 	if flag.NArg() > 0 {
-		runCommand(*socket, flag.Args())
+		runCommand(*socket, *configPath, flag.Args())
 		return
 	}
 
@@ -144,7 +145,7 @@ func main() {
 	}
 }
 
-func runCommand(socket string, args []string) {
+func runCommand(socket, configPath string, args []string) {
 	client, err := dial(socket)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -168,6 +169,15 @@ func runCommand(socket string, args []string) {
 		fmt.Printf("Oracle: %s\n", reply.OracleName)
 		fmt.Printf("Device: %s\n", reply.OracleDeviceID)
 		fmt.Printf("Connected: %t\n", reply.OracleConnected)
+		if len(reply.ManualConflicts) == 0 {
+			if cfg, err := appconfig.Load(configPath); err == nil {
+				if files, err := scanPendingDir(cfg.VaultPath); err == nil {
+					for _, file := range files {
+						reply.ManualConflicts = append(reply.ManualConflicts, file.Rel)
+					}
+				}
+			}
+		}
 		if len(reply.ManualConflicts) > 0 {
 			fmt.Println("Awaiting User Resolution:")
 			for _, path := range reply.ManualConflicts {
@@ -382,6 +392,40 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 	}
 	files := make([]conflictFile, 0, len(reply.Pending))
 	for _, p := range reply.Pending {
+		files = append(files, conflictFile{
+			Path:   filepath.Join(root, filepath.FromSlash(p.Canonical)),
+			Rel:    p.Canonical,
+			Staged: filepath.Join(root, filepath.FromSlash(p.Staged)),
+		})
+	}
+	if len(files) == 0 {
+		return scanPendingDir(root)
+	}
+	return files, nil
+}
+
+func scanPendingDir(root string) ([]conflictFile, error) {
+	dir := filepath.Join(root, ".obsidian", "obsyncd-staging")
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var files []conflictFile
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		bs, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		var p pendingConflict
+		if err := json.Unmarshal(bs, &p); err != nil {
+			return nil, err
+		}
 		files = append(files, conflictFile{
 			Path:   filepath.Join(root, filepath.FromSlash(p.Canonical)),
 			Rel:    p.Canonical,

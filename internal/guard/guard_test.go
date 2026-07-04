@@ -34,6 +34,10 @@ func (f *fakeStager) Stage(_ context.Context, _, canonicalRel, artifactPath stri
 	return statestore.Pending{Canonical: canonicalRel, Staged: "staged"}, nil
 }
 
+func (f *fakeStager) HasPending(context.Context, string, string) (bool, error) {
+	return f.canonical != "", nil
+}
+
 func TestDetectRemoteOverwriteCreatesCopiesAndMarker(t *testing.T) {
 	root := t.TempDir()
 	state := t.TempDir()

@@ -59,6 +59,38 @@ func TestStageAndResolveRemote(t *testing.T) {
 	}
 }
 
+func TestStageIsIdempotentForExistingPending(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	first := filepath.Join(root, "first.tmp")
+	second := filepath.Join(root, "second.tmp")
+	mustWrite(t, first, "first\n")
+	mustWrite(t, second, "second\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(second); !os.IsNotExist(err) {
+		t.Fatalf("second artifact remains: %v", err)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %#v", pending)
+	}
+	staged, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(pending[0].Staged)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(staged) != "first\n" {
+		t.Fatalf("staged overwritten: %q", staged)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

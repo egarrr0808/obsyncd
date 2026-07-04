@@ -25,6 +25,7 @@ type Controller interface {
 
 type Stager interface {
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
+	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
 }
 
 type Guard struct {
@@ -153,6 +154,15 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	if string(localBefore) == string(remoteNow) {
 		return nil
 	}
+	if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
+		return err
+	} else if pending {
+		if err := atomicWrite(path, localBefore, 0o644); err != nil {
+			return err
+		}
+		_ = os.Remove(g.snapshotPath(rel))
+		return g.Controller.Rescan(ctx, g.Folder, []string{rel})
+	}
 	tmpRemote, err := writeRemoteTemp(path, remoteNow)
 	if err != nil {
 		return err
@@ -245,6 +255,15 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 	}
 
 	if g.Stager != nil {
+		if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
+			return err
+		} else if pending {
+			if err := atomicWrite(path, localBefore, 0o644); err != nil {
+				return err
+			}
+			_ = os.Remove(snapPath)
+			return g.Controller.Rescan(ctx, g.Folder, []string{rel})
+		}
 		tmpRemote, err := writeRemoteTemp(path, remoteNow)
 		if err != nil {
 			return err

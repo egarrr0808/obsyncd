@@ -48,6 +48,12 @@ func (s *Store) Stage(_ context.Context, _, canonicalRel, artifactPath string) (
 	if err := validateRel(canonicalRel); err != nil {
 		return Pending{}, err
 	}
+	if p, ok, err := s.pending(canonicalRel); err != nil {
+		return Pending{}, err
+	} else if ok {
+		_ = os.Remove(artifactPath)
+		return p, nil
+	}
 	id := key(canonicalRel)
 	stagedRel := filepath.ToSlash(filepath.Join(".obsidian", "obsyncd-staging", id+".remote"))
 	stagedAbs := filepath.Join(s.Root, filepath.FromSlash(stagedRel))
@@ -66,6 +72,11 @@ func (s *Store) Stage(_ context.Context, _, canonicalRel, artifactPath string) (
 		return Pending{}, err
 	}
 	return p, nil
+}
+
+func (s *Store) HasPending(_ context.Context, _, canonicalRel string) (bool, error) {
+	_, ok, err := s.pending(canonicalRel)
+	return ok, err
 }
 
 func (s *Store) Pending(_ context.Context) ([]Pending, error) {
