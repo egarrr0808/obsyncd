@@ -52,7 +52,14 @@ func (c appController) Resume(_ context.Context, folder string) error {
 }
 
 func (c appController) setPaused(folder string, paused bool) error {
-	waiter, err := c.cfg.Modify(func(cfg *stconfig.Configuration) {
+	return setFolderPaused(c.cfg, folder, paused)
+}
+
+func setFolderPaused(cfg stconfig.Wrapper, folder string, paused bool) error {
+	if cfg == nil {
+		return nil
+	}
+	waiter, err := cfg.Modify(func(cfg *stconfig.Configuration) {
 		fcfg, _, ok := cfg.Folder(folder)
 		if !ok || fcfg.Paused == paused {
 			return
@@ -64,7 +71,7 @@ func (c appController) setPaused(folder string, paused bool) error {
 		return err
 	}
 	waiter.Wait()
-	return c.cfg.Save()
+	return cfg.Save()
 }
 
 func (c appController) Rescan(_ context.Context, folder string, paths []string) error {
@@ -125,11 +132,26 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, fmt.Errorf("certificate: %w", err)
 	}
 	myID := syncthingDeviceID(cert)
+	store := statestore.New(appCfg.VaultPath)
+	pending, err := store.Pending(ctx)
+	if err != nil {
+		loggerCancel()
+		return nil, fmt.Errorf("read pending conflicts: %w", err)
+	}
 
 	stCfg, err := appconfig.BuildSyncthingConfig(appCfg, myID, locations.Get(locations.ConfigFile), evLogger)
 	if err != nil {
 		loggerCancel()
 		return nil, err
+	}
+	if len(pending) > 0 {
+		if err := setFolderPaused(stCfg, appconfig.DefaultFolderID, true); err != nil {
+			loggerCancel()
+			return nil, fmt.Errorf("pause folder with pending conflicts: %w", err)
+		}
+		for _, p := range pending {
+			fmt.Fprintf(os.Stderr, "OBSYNCD HOLD: %s awaiting user resolution; run obsyncctl\n", p.Canonical)
+		}
 	}
 	if err := stCfg.Save(); err != nil {
 		loggerCancel()
@@ -168,7 +190,6 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	controller := appController{app: app, cfg: stCfg}
-	store := statestore.New(appCfg.VaultPath)
 	conflictGuard := &guard.Guard{
 		Root:       appCfg.VaultPath,
 		StateDir:   paths.StateDir,
