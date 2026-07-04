@@ -1,11 +1,10 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO_URL="${OBSYNCD_REPO_URL:-https://github.com/egarrr0808/obsyncd.git}"
 PREFIX="${PREFIX:-/usr/local}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/obsyncd"
 CONFIG_FILE="$CONFIG_DIR/config.yaml"
-SRC_DIR="${OBSYNCD_SRC_DIR:-}"
+SRC_DIR="${OBSYNCD_SRC_DIR:-$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)}"
 
 need_cmd() {
 	if ! command -v "$1" >/dev/null 2>&1; then
@@ -15,22 +14,13 @@ need_cmd() {
 }
 
 need_cmd go
-need_cmd git
-
-if [ -z "$SRC_DIR" ]; then
-	if [ -d .git ] && git remote -v 2>/dev/null | grep -q 'obsyncd'; then
-		SRC_DIR=$(pwd)
-	else
-		SRC_DIR="$HOME/obsyncd"
-		if [ ! -d "$SRC_DIR/.git" ]; then
-			git clone "$REPO_URL" "$SRC_DIR"
-		else
-			git -C "$SRC_DIR" pull --ff-only
-		fi
-	fi
-fi
 
 cd "$SRC_DIR"
+if [ ! -f go.mod ] || [ ! -d cmd/obsyncd ] || [ ! -d cmd/obsyncctl ]; then
+	echo "install.sh must be run from an obsyncd source checkout" >&2
+	echo "clone first: git clone https://github.com/egarrr0808/obsyncd.git ~/obsyncd" >&2
+	exit 1
+fi
 
 go build -tags noassets -o obsyncd ./cmd/obsyncd
 go build -tags noassets -o obsyncctl ./cmd/obsyncctl

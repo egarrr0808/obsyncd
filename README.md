@@ -4,17 +4,15 @@ Headless Obsidian Markdown sync daemon prototype built on Syncthing core librari
 
 ## Install
 
-From a cloned repo:
+Clone once, then run the installer from the checkout:
 
 ```bash
+git clone https://github.com/egarrr0808/obsyncd.git ~/obsyncd
+cd ~/obsyncd
 ./scripts/install.sh
 ```
 
-One-line install from GitHub:
-
-```bash
-git clone https://github.com/egarrr0808/obsyncd.git ~/obsyncd && cd ~/obsyncd && ./scripts/install.sh
-```
+The installer does not clone or pull the repo. It only builds the source tree it is already inside.
 
 The installer:
 
