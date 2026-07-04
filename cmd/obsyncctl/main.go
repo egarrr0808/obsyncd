@@ -96,7 +96,7 @@ func main() {
 	configPath := flag.String("config", defaultConfig, "obsyncd YAML config")
 	flag.Parse()
 
-	if err := update.MaybeRelaunch("obsyncctl", os.Args[1:]); err != nil {
+	if err := update.MaybeRelaunch("obsyncctl", os.Args[1:]); err != nil && os.Getenv("OBSYNCD_UPDATE_VERBOSE") == "1" {
 		fmt.Fprintln(os.Stderr, "obsyncctl update skipped:", err)
 	}
 
