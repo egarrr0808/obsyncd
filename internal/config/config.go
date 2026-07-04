@@ -15,12 +15,15 @@ import (
 )
 
 const DefaultFolderID = "obsidian"
+const ProposalFolderID = "obsyncd-proposals"
 
 type File struct {
-	DeviceName  string       `yaml:"device_name"`
-	VaultPath   string       `yaml:"vault_path"`
-	RemoteNodes []RemoteNode `yaml:"remote_nodes"`
-	StartPaused bool         `yaml:"-"`
+	DeviceName   string       `yaml:"device_name"`
+	Role         string       `yaml:"role"`
+	VaultPath    string       `yaml:"vault_path"`
+	RemoteNodes  []RemoteNode `yaml:"remote_nodes"`
+	StartPaused  bool         `yaml:"-"`
+	ProposalPath string       `yaml:"-"`
 }
 
 type RemoteNode struct {
@@ -46,6 +49,10 @@ func Load(path string) (File, error) {
 }
 
 func (c File) Validate() error {
+	role := c.NormalizedRole()
+	if role != "client" && role != "hub" {
+		return fmt.Errorf("role must be client or hub: %s", c.Role)
+	}
 	if strings.TrimSpace(c.DeviceName) == "" {
 		return errors.New("device_name is required")
 	}
@@ -82,8 +89,19 @@ func (c File) Validate() error {
 	return nil
 }
 
+func (c File) NormalizedRole() string {
+	role := strings.ToLower(strings.TrimSpace(c.Role))
+	if role == "" {
+		return "client"
+	}
+	return role
+}
+
 func BuildSyncthingConfig(app File, myID protocol.DeviceID, configPath string, evLogger events.Logger) (stconfig.Wrapper, error) {
 	cfg := stconfig.New(myID)
+	if app.ProposalPath == "" {
+		app.ProposalPath = filepath.Join(app.VaultPath, ".obsidian", "obsyncd-proposals")
+	}
 
 	cfg.GUI.Enabled = false
 	cfg.GUI.RawAddress = "127.0.0.1:0"
@@ -131,12 +149,28 @@ func BuildSyncthingConfig(app File, myID protocol.DeviceID, configPath string, e
 	folder.FilesystemType = stconfig.FilesystemTypeBasic
 	folder.Path = app.VaultPath
 	folder.Type = stconfig.FolderTypeSendReceive
+	if app.NormalizedRole() == "hub" {
+		folder.Type = stconfig.FolderTypeSendOnly
+	} else {
+		folder.Type = stconfig.FolderTypeReceiveOnly
+	}
 	folder.Devices = folderDevices
 	folder.FSWatcherEnabled = true
 	folder.RescanIntervalS = 3600
 	folder.MaxConflicts = 0
 	folder.Paused = app.StartPaused
-	cfg.Folders = []stconfig.FolderConfiguration{folder}
+
+	proposals := cfg.Defaults.Folder.Copy()
+	proposals.ID = ProposalFolderID
+	proposals.Label = "obsyncd Proposals"
+	proposals.FilesystemType = stconfig.FilesystemTypeBasic
+	proposals.Path = app.ProposalPath
+	proposals.Type = stconfig.FolderTypeSendReceive
+	proposals.Devices = folderDevices
+	proposals.FSWatcherEnabled = true
+	proposals.RescanIntervalS = 10
+	proposals.MaxConflicts = 0
+	cfg.Folders = []stconfig.FolderConfiguration{folder, proposals}
 
 	return stconfig.Wrap(configPath, cfg, myID, evLogger), nil
 }

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	stconfig "github.com/syncthing/syncthing/lib/config"
 	"github.com/syncthing/syncthing/lib/events"
 	"github.com/syncthing/syncthing/lib/protocol"
 	"gopkg.in/yaml.v3"
@@ -16,6 +17,7 @@ func TestLoadYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
 device_name: "my-laptop"
+role: "client"
 vault_path: "/home/egarrr/Obsidian/PersonalVault"
 remote_nodes:
   - name: "oracle-vps"
@@ -31,6 +33,9 @@ remote_nodes:
 	}
 	if cfg.DeviceName != "my-laptop" || !cfg.RemoteNodes[0].Introducer {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+	if cfg.NormalizedRole() != "client" {
+		t.Fatalf("wrong role: %s", cfg.NormalizedRole())
 	}
 }
 
@@ -55,8 +60,10 @@ func TestBuildSyncthingConfigIsHeadless(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := File{
-		DeviceName: "my-laptop",
-		VaultPath:  "/tmp/vault",
+		DeviceName:   "my-laptop",
+		Role:         "client",
+		VaultPath:    "/tmp/vault",
+		ProposalPath: filepath.Join(t.TempDir(), "proposals"),
 		RemoteNodes: []RemoteNode{{
 			Name:       "oracle-vps",
 			DeviceID:   deviceID,
@@ -78,6 +85,16 @@ func TestBuildSyncthingConfigIsHeadless(t *testing.T) {
 	}
 	if cfg.FolderList()[0].Path != app.VaultPath {
 		t.Fatalf("wrong vault path")
+	}
+	folders := cfg.FolderList()
+	if len(folders) != 2 {
+		t.Fatalf("folders = %d", len(folders))
+	}
+	if folders[0].Type != stconfig.FolderTypeReceiveOnly {
+		t.Fatalf("client vault should be receiveonly: %v", folders[0].Type)
+	}
+	if folders[1].ID != ProposalFolderID || folders[1].Path != app.ProposalPath {
+		t.Fatalf("wrong proposal folder: %#v", folders[1])
 	}
 	var introducer bool
 	for _, dev := range cfg.DeviceList() {

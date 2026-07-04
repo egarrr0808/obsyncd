@@ -25,10 +25,29 @@ Use `INSTALL_SERVICE=0 ./scripts/install.sh` to only install binaries. Use `REST
 
 ## Config
 
-Example laptop config:
+Server hub config:
+
+```yaml
+device_name: "oracle-vps"
+role: "hub"
+vault_path: "/home/ubuntu/Obsidian/PersonalVault"
+
+remote_nodes:
+  - name: "laptop-1"
+    device_id: "LAPTOP_1_DEVICE_ID"
+    address: "dynamic"
+    introducer: false
+  - name: "laptop-2"
+    device_id: "LAPTOP_2_DEVICE_ID"
+    address: "dynamic"
+    introducer: false
+```
+
+Laptop client config:
 
 ```yaml
 device_name: "my-laptop"
+role: "client"
 vault_path: "/home/YOURUSER/Obsidian/PersonalVault"
 
 remote_nodes:
@@ -37,6 +56,8 @@ remote_nodes:
     address: "tcp://SERVER_PUBLIC_IP:22000"
     introducer: true
 ```
+
+The hub publishes the accepted vault as a send-only Syncthing folder. Clients receive that vault and send edits through the internal `obsyncd-proposals` folder. If the hub sees a stale edit, it creates a conflict job for the client; resolve it with `obsyncctl` on that laptop.
 
 Get a machine's Syncthing device ID:
 

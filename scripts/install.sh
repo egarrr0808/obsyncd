@@ -49,6 +49,7 @@ install -m 0755 "$TMP_DIR/obsyncctl" "$PREFIX/bin/obsyncctl"
 if [ ! -f "$CONFIG_FILE" ]; then
 	cat > "$CONFIG_FILE" <<'CFG'
 device_name: "CHANGE-ME"
+role: "client"
 vault_path: "/home/CHANGE-ME/Obsidian/PersonalVault"
 
 remote_nodes:

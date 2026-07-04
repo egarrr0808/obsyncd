@@ -14,6 +14,7 @@ import (
 	"obsyncd/internal/guard"
 	"obsyncd/internal/interceptor"
 	"obsyncd/internal/ipc"
+	"obsyncd/internal/proposal"
 	"obsyncd/internal/statestore"
 
 	stconfig "github.com/syncthing/syncthing/lib/config"
@@ -111,6 +112,10 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
 		return nil, err
 	}
+	appCfg.ProposalPath = filepath.Join(paths.StateDir, "proposals")
+	if err := os.MkdirAll(appCfg.ProposalPath, 0o700); err != nil {
+		return nil, err
+	}
 	if err := ensureSyncIgnores(appCfg.VaultPath); err != nil {
 		return nil, err
 	}
@@ -138,14 +143,15 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, fmt.Errorf("read pending conflicts: %w", err)
 	}
-	appCfg.StartPaused = len(pending) > 0
+	role := appCfg.NormalizedRole()
+	appCfg.StartPaused = role == "client" && len(pending) > 0
 
 	stCfg, err := appconfig.BuildSyncthingConfig(appCfg, myID, locations.Get(locations.ConfigFile), evLogger)
 	if err != nil {
 		loggerCancel()
 		return nil, err
 	}
-	if len(pending) > 0 {
+	if role == "client" && len(pending) > 0 {
 		for _, p := range pending {
 			fmt.Fprintf(os.Stderr, "OBSYNCD HOLD: %s awaiting user resolution; run obsyncctl\n", p.Canonical)
 		}
@@ -187,24 +193,6 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	controller := appController{app: app, cfg: stCfg}
-	conflictGuard := &guard.Guard{
-		Root:       appCfg.VaultPath,
-		StateDir:   paths.StateDir,
-		Folder:     appconfig.DefaultFolderID,
-		Logger:     evLogger,
-		Controller: controller,
-		Stager:     store,
-	}
-	go func() {
-		if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}()
-	go func() {
-		if err := conflictGuard.RunSnapshotScanner(ctx, 250*time.Millisecond); err != nil && ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}()
 	go func() {
 		if err := (eventloop.BaseCapture{
 			Logger: evLogger,
@@ -215,21 +203,83 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	}()
-	conflictInterceptor := &interceptor.Interceptor{
-		Root:       appCfg.VaultPath,
-		Folder:     appconfig.DefaultFolderID,
-		Controller: controller,
-		Bases:      store,
-	}
-	go func() {
-		if err := (eventloop.Loop{
-			Logger:  evLogger,
-			Folder:  appconfig.DefaultFolderID,
-			Handler: conflictInterceptor,
-		}).Run(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, err)
+	if role == "hub" {
+		go func() {
+			if err := (proposal.Hub{
+				Root:           appCfg.VaultPath,
+				ProposalDir:    appCfg.ProposalPath,
+				Folder:         appconfig.DefaultFolderID,
+				ProposalFolder: appconfig.ProposalFolderID,
+				DeviceID:       myID.String(),
+				Store:          store,
+				Controller:     controller,
+				Interval:       time.Second,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+	} else {
+		conflictGuard := &guard.Guard{
+			Root:       appCfg.VaultPath,
+			StateDir:   paths.StateDir,
+			Folder:     appconfig.DefaultFolderID,
+			Logger:     evLogger,
+			Controller: controller,
+			Stager:     store,
 		}
-	}()
+		go func() {
+			if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+		go func() {
+			if err := conflictGuard.RunSnapshotScanner(ctx, 250*time.Millisecond); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+		conflictInterceptor := &interceptor.Interceptor{
+			Root:       appCfg.VaultPath,
+			Folder:     appconfig.DefaultFolderID,
+			Controller: controller,
+			Bases:      store,
+		}
+		go func() {
+			if err := (eventloop.Loop{
+				Logger:  evLogger,
+				Folder:  appconfig.DefaultFolderID,
+				Handler: conflictInterceptor,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+		go func() {
+			if err := (&proposal.Submitter{
+				Root:        appCfg.VaultPath,
+				ProposalDir: appCfg.ProposalPath,
+				Folder:      appconfig.DefaultFolderID,
+				DeviceID:    myID.String(),
+				Store:       store,
+				Controller:  controller,
+				Interval:    time.Second,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+		go func() {
+			if err := (proposal.ConflictIngest{
+				Root:           appCfg.VaultPath,
+				ProposalDir:    appCfg.ProposalPath,
+				Folder:         appconfig.DefaultFolderID,
+				ProposalFolder: appconfig.ProposalFolderID,
+				DeviceID:       myID.String(),
+				Store:          store,
+				Controller:     controller,
+				Interval:       time.Second,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
+	}
 
 	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, store, oracleID, oracleName)
 	if err != nil {
