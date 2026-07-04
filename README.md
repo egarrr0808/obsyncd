@@ -19,8 +19,9 @@ The installer:
 - builds `obsyncd` and `obsyncctl` with `-tags noassets`
 - installs both into `~/.local/bin` by default
 - creates `~/.config/obsyncd/config.yaml` if missing
+- installs and restarts a user service on Linux systemd or macOS launchd
 
-Use `PREFIX=/usr/local ./scripts/install.sh` only if you do not need self-update, or if that directory is writable by the daemon user.
+Use `INSTALL_SERVICE=0 ./scripts/install.sh` to only install binaries. Use `RESTART_SERVICE=0 ./scripts/install.sh` to avoid restarting the daemon.
 
 ## Config
 
@@ -46,10 +47,14 @@ obsyncd -config ~/.config/obsyncd/config.yaml id
 ## Run
 
 ```bash
-obsyncd -config ~/.config/obsyncd/config.yaml
+systemctl --user restart obsyncd.service
 ```
 
-In another terminal:
+Or run manually if you installed without a service:
+
+```bash
+obsyncd -config ~/.config/obsyncd/config.yaml
+```
 
 ```bash
 obsyncctl status
