@@ -1,0 +1,32 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"obsyncd/internal/core"
+)
+
+func main() {
+	defaultConfig := filepath.Join(os.Getenv("HOME"), ".config", "obsyncd", "config.yaml")
+	configPath := flag.String("config", defaultConfig, "path to obsyncd YAML config")
+	flag.Parse()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	daemon, err := core.Start(ctx, *configPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := daemon.Wait(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}

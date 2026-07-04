@@ -1,0 +1,5 @@
+/obsyncd
+/obsyncctl
+*.test
+*.out
+.DS_Store
