@@ -159,14 +159,17 @@ func relaunch(exe string, args []string) error {
 func git(repo string, args ...string) error {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repo
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 func gitOutput(repo string, args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	bs, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
