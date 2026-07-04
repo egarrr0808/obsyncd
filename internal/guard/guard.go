@@ -81,6 +81,55 @@ func (g *Guard) Run(ctx context.Context) error {
 	}
 }
 
+func (g *Guard) RunSnapshotScanner(ctx context.Context, interval time.Duration) error {
+	if interval <= 0 {
+		interval = 250 * time.Millisecond
+	}
+	if err := os.MkdirAll(g.snapshotDir(), 0o700); err != nil {
+		return err
+	}
+	seen, err := g.scanHashes()
+	if err != nil {
+		return err
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+			next, err := g.scanHashes()
+			if err != nil {
+				log.Printf("obsyncd conflict guard scan failed: %v", err)
+				continue
+			}
+			for rel, sum := range next {
+				if seen[rel] == "" {
+					seen[rel] = sum
+					continue
+				}
+				if seen[rel] == sum {
+					continue
+				}
+				seen[rel] = sum
+				if _, err := os.Stat(g.snapshotPath(rel)); err == nil {
+					continue
+				}
+				if err := g.snapshotLocal(rel); err != nil {
+					log.Printf("obsyncd conflict guard snapshot failed for %s: %v", rel, err)
+				}
+			}
+			for rel := range seen {
+				if _, ok := next[rel]; !ok {
+					delete(seen, rel)
+					_ = os.Remove(g.snapshotPath(rel))
+				}
+			}
+		}
+	}
+}
+
 func (g *Guard) snapshotLocal(rel string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -97,6 +146,33 @@ func (g *Guard) snapshotLocal(rel string) error {
 		return nil
 	}
 	return atomicWrite(g.snapshotPath(rel), bs, 0o600)
+}
+
+func (g *Guard) scanHashes() (map[string]string, error) {
+	out := make(map[string]string)
+	err := filepath.WalkDir(g.Root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if isInternalPath(g.Root, path) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		rel := relFor(g.Root, path)
+		if !isMarkdown(rel) || isGenerated(rel) || isInternalRel(rel) {
+			return nil
+		}
+		bs, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		sum := sha256.Sum256(bs)
+		out[rel] = hex.EncodeToString(sum[:])
+		return nil
+	})
+	return out, err
 }
 
 func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
@@ -219,6 +295,15 @@ func isMarkdown(path string) bool {
 func isGenerated(path string) bool {
 	base := filepath.Base(path)
 	return strings.Contains(base, ".sync-conflict-") || strings.Contains(base, ".local-v1.") || strings.Contains(base, ".remote-v2.")
+}
+
+func isInternalPath(root, path string) bool {
+	return isInternalRel(relFor(root, path))
+}
+
+func isInternalRel(path string) bool {
+	slash := filepath.ToSlash(filepath.Clean(path))
+	return strings.HasPrefix(slash, ".obsidian/obsyncd-")
 }
 
 func (g *Guard) snapshotDir() string {

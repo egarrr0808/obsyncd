@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	appconfig "obsyncd/internal/config"
 	eventloop "obsyncd/internal/events"
@@ -150,6 +151,11 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	}
 	go func() {
 		if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+	go func() {
+		if err := conflictGuard.RunSnapshotScanner(ctx, 250*time.Millisecond); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	}()

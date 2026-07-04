@@ -93,6 +93,39 @@ func TestDetectRemoteOverwriteDropsStaleSnapshot(t *testing.T) {
 	mustContain(t, path, "remote edit\n")
 }
 
+func TestSnapshotScannerCapturesChangedMarkdown(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		errs <- g.RunSnapshotScanner(ctx, 10*time.Millisecond)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if bs, err := os.ReadFile(g.snapshotPath("note.md")); err == nil && string(bs) == "local\n" {
+			cancel()
+			<-errs
+			return
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-errs
+			t.Fatal("snapshot not captured")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func mustContain(t *testing.T, path, want string) {
 	t.Helper()
 	bs, err := os.ReadFile(path)
