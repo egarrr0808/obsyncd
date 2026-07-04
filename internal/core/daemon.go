@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	appconfig "obsyncd/internal/config"
@@ -77,6 +78,9 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := ensureSyncIgnores(appCfg.VaultPath); err != nil {
 		return nil, err
 	}
 	if err := locations.SetBaseDir(locations.ConfigBaseDir, paths.StateDir); err != nil {
@@ -252,4 +256,38 @@ func oracleDevice(cfg appconfig.File) (protocol.DeviceID, string, error) {
 	}
 	id, err := protocol.DeviceIDFromString(cfg.RemoteNodes[0].DeviceID)
 	return id, cfg.RemoteNodes[0].Name, err
+}
+
+func ensureSyncIgnores(root string) error {
+	if root == "" {
+		return nil
+	}
+	path := filepath.Join(root, ".stignore")
+	existing := map[string]struct{}{}
+	var lines []string
+	if bs, err := os.ReadFile(path); err == nil {
+		for _, line := range strings.Split(string(bs), "\n") {
+			if line == "" {
+				continue
+			}
+			existing[line] = struct{}{}
+			lines = append(lines, line)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	for _, line := range []string{
+		".obsidian/**",
+		"*.sync-conflict-*",
+		".obsyncd-*",
+	} {
+		if _, ok := existing[line]; !ok {
+			lines = append(lines, line)
+		}
+	}
+	data := strings.Join(lines, "\n") + "\n"
+	if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+		return err
+	}
+	return nil
 }

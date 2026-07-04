@@ -133,7 +133,7 @@ func BuildSyncthingConfig(app File, myID protocol.DeviceID, configPath string, e
 	folder.Devices = folderDevices
 	folder.FSWatcherEnabled = true
 	folder.RescanIntervalS = 3600
-	folder.MaxConflicts = -1
+	folder.MaxConflicts = 0
 	cfg.Folders = []stconfig.FolderConfiguration{folder}
 
 	return stconfig.Wrap(configPath, cfg, myID, evLogger), nil
