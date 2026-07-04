@@ -27,6 +27,30 @@ func TestMergeNonOverlapping(t *testing.T) {
 	}
 }
 
+func TestMergeSamePositionAdditionsAutoMerge(t *testing.T) {
+	base := "a\nb\n"
+	local := "a\nlocal add\nb\n"
+	remote := "a\nremote add\nb\n"
+	want := "a\nlocal add\nremote add\nb\n"
+	res := MergeDetailed(base, local, remote)
+	if res.HasConflict {
+		t.Fatalf("unexpected conflict in %q", res.Content)
+	}
+	if res.Content != want {
+		t.Fatalf("merge = %q want %q", res.Content, want)
+	}
+}
+
+func TestMergeDeleteModifySameLineConflicts(t *testing.T) {
+	res := MergeDetailed("a\nb\nc\n", "a\nc\n", "a\nremote\nc\n")
+	if !res.HasConflict {
+		t.Fatalf("expected hard collision in %q", res.Content)
+	}
+	if !strings.Contains(res.Content, "%%OBSYNCD_CONFLICT_START%%\n") {
+		t.Fatalf("missing conflict marker in %q", res.Content)
+	}
+}
+
 func TestMergeOverlapConflict(t *testing.T) {
 	got := Merge("a\nb\nc\n", "a\nlocal\nc\n", "a\nremote\nc\n")
 	for _, part := range []string{

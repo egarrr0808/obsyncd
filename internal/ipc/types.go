@@ -9,6 +9,7 @@ type StatusReply struct {
 	OracleName      string
 	OracleDeviceID  string
 	OracleConnected bool
+	ManualConflicts []string
 }
 
 type RescanArgs struct {

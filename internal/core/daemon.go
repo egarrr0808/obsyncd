@@ -151,7 +151,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		}
 	}()
 
-	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, oracleID, oracleName)
+	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, appCfg.VaultPath, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
 		cfgCancel()

@@ -36,6 +36,7 @@ type statusReply struct {
 	OracleName      string
 	OracleDeviceID  string
 	OracleConnected bool
+	ManualConflicts []string
 }
 
 type rescanArgs struct {
@@ -150,6 +151,12 @@ func runCommand(socket string, args []string) {
 		fmt.Printf("Oracle: %s\n", reply.OracleName)
 		fmt.Printf("Device: %s\n", reply.OracleDeviceID)
 		fmt.Printf("Connected: %t\n", reply.OracleConnected)
+		if len(reply.ManualConflicts) > 0 {
+			fmt.Println("Awaiting User Resolution:")
+			for _, path := range reply.ManualConflicts {
+				fmt.Printf("  %s\n", path)
+			}
+		}
 	case "rescan":
 		var reply rescanReply
 		if err := callRescan(client, args[1:], &reply); err != nil {

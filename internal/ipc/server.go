@@ -7,6 +7,7 @@ import (
 	"net/rpc"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/syncthing"
@@ -17,6 +18,7 @@ type Server struct {
 	folderID string
 	oracleID protocol.DeviceID
 	oracle   string
+	root     string
 	socket   string
 	listener net.Listener
 }
@@ -32,7 +34,7 @@ func DefaultSocketPath() string {
 	return filepath.Join(dir, "obsyncd", "obsyncd.sock")
 }
 
-func Start(ctx context.Context, socket string, app *syncthing.App, folderID string, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
+func Start(ctx context.Context, socket string, app *syncthing.App, folderID, root string, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
 	if socket == "" {
 		socket = DefaultSocketPath()
 	}
@@ -57,6 +59,7 @@ func Start(ctx context.Context, socket string, app *syncthing.App, folderID stri
 		folderID: folderID,
 		oracleID: oracleID,
 		oracle:   oracleName,
+		root:     root,
 		socket:   socket,
 		listener: ln,
 	}
@@ -91,6 +94,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		OracleName:      s.oracle,
 		OracleDeviceID:  s.oracleID.String(),
 		OracleConnected: s.app.Internals.IsConnectedTo(s.oracleID),
+		ManualConflicts: scanManualConflicts(s.root),
 	}
 	return nil
 }
@@ -105,4 +109,30 @@ func (s *Server) Rescan(args RescanArgs, reply *RescanReply) error {
 	}
 	*reply = RescanReply{FolderID: s.folderID, Paths: args.Paths, OK: true}
 	return nil
+}
+
+func scanManualConflicts(root string) []string {
+	var files []string
+	if root == "" {
+		return files
+	}
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		if ext != ".md" && ext != ".markdown" {
+			return nil
+		}
+		bs, err := os.ReadFile(path)
+		if err != nil || !strings.Contains(string(bs), "%%OBSYNCD_CONFLICT_START%%") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, path)
+		if err == nil {
+			files = append(files, rel)
+		}
+		return nil
+	})
+	return files
 }

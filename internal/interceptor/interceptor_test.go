@@ -82,6 +82,37 @@ func TestHandleArtifactMergesAndDeletesConflict(t *testing.T) {
 	}
 }
 
+func TestHandleArtifactAutoMergesNonOverlapping(t *testing.T) {
+	root := t.TempDir()
+	canonicalRel := filepath.Join("vault", "note.md")
+	artifactRel := filepath.Join("vault", "note.sync-conflict-20260704-120000-REMOTE.md")
+	mustWrite(t, filepath.Join(root, canonicalRel), "title local\nbody\nend\n")
+	mustWrite(t, filepath.Join(root, artifactRel), "title\nbody\nend remote\n")
+
+	ctrl := &fakeController{}
+	in := &Interceptor{
+		Root:       root,
+		Folder:     "vault",
+		Controller: ctrl,
+		Bases:      fakeBases{canonicalRel: "title\nbody\nend\n"},
+	}
+	if err := in.HandleArtifact(context.Background(), artifactRel); err != nil {
+		t.Fatal(err)
+	}
+
+	merged := string(mustRead(t, filepath.Join(root, canonicalRel)))
+	if strings.Contains(merged, "%%OBSYNCD_CONFLICT_START%%") {
+		t.Fatalf("unexpected conflict markers in %q", merged)
+	}
+	want := "title local\nbody\nend remote\n"
+	if merged != want {
+		t.Fatalf("merged = %q want %q", merged, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, artifactRel)); !os.IsNotExist(err) {
+		t.Fatalf("artifact still exists or stat failed: %v", err)
+	}
+}
+
 func TestHandleArtifactKeepsArtifactWhenCanonicalMissing(t *testing.T) {
 	root := t.TempDir()
 	artifactRel := "note.sync-conflict-20260704-120000-REMOTE.md"

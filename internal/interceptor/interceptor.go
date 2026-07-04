@@ -128,7 +128,7 @@ func (i *Interceptor) HandleArtifact(ctx context.Context, artifactRel string) er
 
 	var merged string
 	if ok {
-		merged = diffmerge.Merge(base, string(localBytes), string(remoteBytes))
+		merged = diffmerge.MergeDetailed(base, string(localBytes), string(remoteBytes)).Content
 	} else {
 		merged = missingBaseConflict(string(localBytes), string(remoteBytes))
 	}
