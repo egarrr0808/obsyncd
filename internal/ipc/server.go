@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"obsyncd/internal/statestore"
+
 	"github.com/syncthing/syncthing/lib/protocol"
 	"github.com/syncthing/syncthing/lib/syncthing"
 )
@@ -19,6 +21,7 @@ type Server struct {
 	oracleID protocol.DeviceID
 	oracle   string
 	root     string
+	store    *statestore.Store
 	socket   string
 	listener net.Listener
 }
@@ -34,7 +37,7 @@ func DefaultSocketPath() string {
 	return filepath.Join(dir, "obsyncd", "obsyncd.sock")
 }
 
-func Start(ctx context.Context, socket string, app *syncthing.App, folderID, root string, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
+func Start(ctx context.Context, socket string, app *syncthing.App, folderID, root string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
 	if socket == "" {
 		socket = DefaultSocketPath()
 	}
@@ -60,6 +63,7 @@ func Start(ctx context.Context, socket string, app *syncthing.App, folderID, roo
 		oracleID: oracleID,
 		oracle:   oracleName,
 		root:     root,
+		store:    store,
 		socket:   socket,
 		listener: ln,
 	}
@@ -94,7 +98,8 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		OracleName:      s.oracle,
 		OracleDeviceID:  s.oracleID.String(),
 		OracleConnected: s.app.Internals.IsConnectedTo(s.oracleID),
-		ManualConflicts: scanManualConflicts(s.root),
+		ManualConflicts: s.manualConflicts(),
+		Pending:         s.pendingConflicts(),
 	}
 	return nil
 }
@@ -109,6 +114,48 @@ func (s *Server) Rescan(args RescanArgs, reply *RescanReply) error {
 	}
 	*reply = RescanReply{FolderID: s.folderID, Paths: args.Paths, OK: true}
 	return nil
+}
+
+func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
+	if s.store == nil {
+		return errors.New("state store is nil")
+	}
+	path, err := s.store.Resolve(context.Background(), s.folderID, args.Path, args.Action)
+	if err != nil {
+		return err
+	}
+	if err := s.app.Internals.ScanFolderSubdirs(s.folderID, []string{path}); err != nil {
+		return err
+	}
+	*reply = ResolveReply{Path: path, OK: true}
+	return nil
+}
+
+func (s *Server) manualConflicts() []string {
+	if s.store == nil {
+		return scanManualConflicts(s.root)
+	}
+	pending := s.pendingConflicts()
+	out := make([]string, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, p.Canonical)
+	}
+	return out
+}
+
+func (s *Server) pendingConflicts() []PendingConflict {
+	if s.store == nil {
+		return nil
+	}
+	pending, err := s.store.Pending(context.Background())
+	if err != nil {
+		return nil
+	}
+	out := make([]PendingConflict, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, PendingConflict{Canonical: p.Canonical, Staged: p.Staged})
+	}
+	return out
 }
 
 func scanManualConflicts(root string) []string {

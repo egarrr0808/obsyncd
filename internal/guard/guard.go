@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"obsyncd/internal/diffmerge"
+	"obsyncd/internal/statestore"
 
 	stevents "github.com/syncthing/syncthing/lib/events"
 )
@@ -22,12 +23,17 @@ type Controller interface {
 	Rescan(ctx context.Context, folder string, paths []string) error
 }
 
+type Stager interface {
+	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
+}
+
 type Guard struct {
 	Root           string
 	StateDir       string
 	Folder         string
 	Logger         stevents.Logger
 	Controller     Controller
+	Stager         Stager
 	MaxSnapshotAge time.Duration
 
 	mu sync.Mutex
@@ -123,6 +129,23 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 		return os.Remove(snapPath)
 	}
 
+	if g.Stager != nil {
+		tmpRemote, err := writeRemoteTemp(path, remoteNow)
+		if err != nil {
+			return err
+		}
+		if _, err := g.Stager.Stage(ctx, g.Folder, rel, tmpRemote); err != nil {
+			_ = os.Remove(tmpRemote)
+			return err
+		}
+		if err := atomicWrite(path, localBefore, 0o644); err != nil {
+			return err
+		}
+		_ = os.Remove(snapPath)
+		log.Printf("OBSYNCD CONFLICT: %s awaiting user resolution; run obsyncctl", rel)
+		return g.Controller.Rescan(ctx, g.Folder, []string{rel})
+	}
+
 	localCopy, remoteCopy := copyPaths(path)
 	if err := atomicWrite(localCopy, localBefore, 0o644); err != nil {
 		return err
@@ -140,6 +163,29 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 	_ = os.Remove(snapPath)
 	log.Printf("OBSYNCD CONFLICT: %s changed on multiple machines; run obsyncctl. Copies: %s %s", rel, filepath.Base(localCopy), filepath.Base(remoteCopy))
 	return g.Controller.Rescan(ctx, g.Folder, []string{rel, relFor(g.Root, localCopy), relFor(g.Root, remoteCopy)})
+}
+
+func writeRemoteTemp(path string, data []byte) (string, error) {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".obsyncd-remote-*")
+	if err != nil {
+		return "", err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
 }
 
 func fileEventPath(ev stevents.Event) (path, folder string, ok bool) {

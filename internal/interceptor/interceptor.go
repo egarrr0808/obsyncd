@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"obsyncd/internal/diffmerge"
+	"obsyncd/internal/statestore"
 )
 
 type Event struct {
@@ -33,6 +34,8 @@ type Controller interface {
 
 type BaseStore interface {
 	Base(ctx context.Context, folder, path string) (string, bool, error)
+	SaveBase(ctx context.Context, folder, path, content string) error
+	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 }
 
 type Interceptor struct {
@@ -126,17 +129,25 @@ func (i *Interceptor) HandleArtifact(ctx context.Context, artifactRel string) er
 		return err
 	}
 
-	var merged string
+	var merged diffmerge.Result
 	if ok {
-		merged = diffmerge.MergeDetailed(base, string(localBytes), string(remoteBytes)).Content
+		merged = diffmerge.MergeDetailed(base, string(localBytes), string(remoteBytes))
 	} else {
-		merged = missingBaseConflict(string(localBytes), string(remoteBytes))
+		merged = diffmerge.Result{Content: missingBaseConflict(string(localBytes), string(remoteBytes)), HasConflict: true}
 	}
 
-	if err := atomicWriteFile(canonicalPath, []byte(merged), 0o644); err != nil {
+	if merged.HasConflict {
+		if _, err := i.Bases.Stage(ctx, i.Folder, canonicalRel, artifactPath); err != nil {
+			return err
+		}
+		logConflict(canonicalRel)
+		return resumeErr
+	}
+	if err := atomicWriteFile(canonicalPath, []byte(merged.Content), 0o644); err != nil {
 		return err
 	}
-	if err := os.Remove(artifactPath); err != nil {
+	_ = os.Remove(artifactPath)
+	if err := i.Bases.SaveBase(ctx, i.Folder, canonicalRel, merged.Content); err != nil {
 		return err
 	}
 	if err := i.Controller.Rescan(ctx, i.Folder, []string{canonicalRel}); err != nil {
@@ -176,6 +187,10 @@ func ensureEOL(s, eol string) string {
 		return s
 	}
 	return s + eol
+}
+
+func logConflict(path string) {
+	fmt.Fprintf(os.Stderr, "OBSYNCD CONFLICT: %s awaiting user resolution; run obsyncctl\n", path)
 }
 
 func (i *Interceptor) fileLock(path string) *sync.Mutex {

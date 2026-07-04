@@ -3,6 +3,9 @@ package events
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"obsyncd/internal/interceptor"
@@ -85,6 +88,56 @@ type EventSource struct {
 	Mask   stevents.EventType
 }
 
+type BaseStore interface {
+	SaveBase(ctx context.Context, folder, path, content string) error
+}
+
+type BaseCapture struct {
+	Logger stevents.Logger
+	Folder string
+	Root   string
+	Store  BaseStore
+}
+
+func (c BaseCapture) Run(ctx context.Context) error {
+	if c.Logger == nil {
+		return fmt.Errorf("event logger is nil")
+	}
+	if c.Store == nil {
+		return fmt.Errorf("base store is nil")
+	}
+	sub := c.Logger.Subscribe(stevents.ItemFinished)
+	defer sub.Unsubscribe()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev, ok := <-sub.C():
+			if !ok {
+				return nil
+			}
+			path, folder, ok := fileEventPath(ev)
+			if !ok || !capturePath(path) {
+				continue
+			}
+			if c.Folder != "" && folder != "" && folder != c.Folder {
+				continue
+			}
+			full, err := safeJoin(c.Root, path)
+			if err != nil {
+				continue
+			}
+			bs, err := os.ReadFile(full)
+			if err != nil {
+				continue
+			}
+			if err := c.Store.SaveBase(ctx, folder, path, string(bs)); err != nil {
+				return err
+			}
+		}
+	}
+}
+
 func (s EventSource) Events(ctx context.Context, since int64) ([]interceptor.Event, error) {
 	if s.Logger == nil {
 		return nil, fmt.Errorf("event logger is nil")
@@ -118,4 +171,21 @@ func (s EventSource) Events(ctx context.Context, since int64) ([]interceptor.Eve
 		}
 		return nil, err
 	}
+}
+
+func capturePath(path string) bool {
+	slash := filepath.ToSlash(filepath.Clean(path))
+	if strings.HasPrefix(slash, ".obsidian/obsyncd-") || strings.Contains(filepath.Base(slash), ".sync-conflict-") {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	return ext == ".md" || ext == ".markdown"
+}
+
+func safeJoin(root, rel string) (string, error) {
+	clean := filepath.Clean(rel)
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("unsafe relative path: %s", rel)
+	}
+	return filepath.Join(root, clean), nil
 }

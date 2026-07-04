@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"obsyncd/internal/statestore"
 )
 
 type fakeController struct {
@@ -36,6 +38,12 @@ func (f fakeBases) Base(_ context.Context, _, path string) (string, bool, error)
 	return v, ok, nil
 }
 
+func (f fakeBases) SaveBase(context.Context, string, string, string) error { return nil }
+
+func (f fakeBases) Stage(context.Context, string, string, string) (statestore.Pending, error) {
+	return statestore.Pending{}, nil
+}
+
 func TestCanonicalPath(t *testing.T) {
 	got, ok := CanonicalPath("dir/note.sync-conflict-20260704-120000-ABCDEF.md")
 	if !ok {
@@ -57,27 +65,38 @@ func TestHandleArtifactMergesAndDeletesConflict(t *testing.T) {
 	mustWrite(t, filepath.Join(root, artifactRel), "a\nremote\nc\n")
 
 	ctrl := &fakeController{}
+	store := statestore.New(root)
+	if err := store.SaveBase(context.Background(), "vault", canonicalRel, "a\nb\nc\n"); err != nil {
+		t.Fatal(err)
+	}
 	in := &Interceptor{
 		Root:       root,
 		Folder:     "vault",
 		Controller: ctrl,
-		Bases:      fakeBases{canonicalRel: "a\nb\nc\n"},
+		Bases:      store,
 	}
 	if err := in.HandleArtifact(context.Background(), artifactRel); err != nil {
 		t.Fatal(err)
 	}
 
 	merged := string(mustRead(t, filepath.Join(root, canonicalRel)))
-	if !strings.Contains(merged, "%%OBSYNCD_CONFLICT_START%%\n") || !strings.Contains(merged, "remote\n") {
-		t.Fatalf("missing conflict markers in %q", merged)
+	if strings.Contains(merged, "%%OBSYNCD_CONFLICT_START%%") || merged != "a\nlocal\nc\n" {
+		t.Fatalf("canonical changed during staged conflict: %q", merged)
 	}
 	if _, err := os.Stat(filepath.Join(root, artifactRel)); !os.IsNotExist(err) {
 		t.Fatalf("artifact still exists or stat failed: %v", err)
 	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Canonical != filepath.ToSlash(canonicalRel) {
+		t.Fatalf("pending = %#v", pending)
+	}
 	if !ctrl.paused || !ctrl.resumed {
 		t.Fatalf("pause/resume not called: %#v", ctrl)
 	}
-	if len(ctrl.rescans) != 1 || ctrl.rescans[0] != canonicalRel {
+	if len(ctrl.rescans) != 0 {
 		t.Fatalf("rescans = %#v", ctrl.rescans)
 	}
 }
@@ -90,11 +109,15 @@ func TestHandleArtifactAutoMergesNonOverlapping(t *testing.T) {
 	mustWrite(t, filepath.Join(root, artifactRel), "title\nbody\nend remote\n")
 
 	ctrl := &fakeController{}
+	store := statestore.New(root)
+	if err := store.SaveBase(context.Background(), "vault", canonicalRel, "title\nbody\nend\n"); err != nil {
+		t.Fatal(err)
+	}
 	in := &Interceptor{
 		Root:       root,
 		Folder:     "vault",
 		Controller: ctrl,
-		Bases:      fakeBases{canonicalRel: "title\nbody\nend\n"},
+		Bases:      store,
 	}
 	if err := in.HandleArtifact(context.Background(), artifactRel); err != nil {
 		t.Fatal(err)

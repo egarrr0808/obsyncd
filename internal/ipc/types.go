@@ -10,6 +10,12 @@ type StatusReply struct {
 	OracleDeviceID  string
 	OracleConnected bool
 	ManualConflicts []string
+	Pending         []PendingConflict
+}
+
+type PendingConflict struct {
+	Canonical string
+	Staged    string
 }
 
 type RescanArgs struct {
@@ -20,4 +26,14 @@ type RescanReply struct {
 	FolderID string
 	Paths    []string
 	OK       bool
+}
+
+type ResolveArgs struct {
+	Path   string
+	Action string
+}
+
+type ResolveReply struct {
+	Path string
+	OK   bool
 }

@@ -12,6 +12,7 @@ import (
 	"obsyncd/internal/guard"
 	"obsyncd/internal/interceptor"
 	"obsyncd/internal/ipc"
+	"obsyncd/internal/statestore"
 
 	"github.com/syncthing/syncthing/lib/db/backend"
 	"github.com/syncthing/syncthing/lib/events"
@@ -138,20 +139,47 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	controller := appController{app: app}
+	store := statestore.New(appCfg.VaultPath)
 	conflictGuard := &guard.Guard{
 		Root:       appCfg.VaultPath,
 		StateDir:   paths.StateDir,
 		Folder:     appconfig.DefaultFolderID,
 		Logger:     evLogger,
 		Controller: controller,
+		Stager:     store,
 	}
 	go func() {
 		if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
 	}()
+	go func() {
+		if err := (eventloop.BaseCapture{
+			Logger: evLogger,
+			Folder: appconfig.DefaultFolderID,
+			Root:   appCfg.VaultPath,
+			Store:  store,
+		}).Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+	conflictInterceptor := &interceptor.Interceptor{
+		Root:       appCfg.VaultPath,
+		Folder:     appconfig.DefaultFolderID,
+		Controller: controller,
+		Bases:      store,
+	}
+	go func() {
+		if err := (eventloop.Loop{
+			Logger:  evLogger,
+			Folder:  appconfig.DefaultFolderID,
+			Handler: conflictInterceptor,
+		}).Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
 
-	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, appCfg.VaultPath, oracleID, oracleName)
+	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, appCfg.VaultPath, store, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
 		cfgCancel()

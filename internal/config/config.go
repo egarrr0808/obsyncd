@@ -93,6 +93,7 @@ func BuildSyncthingConfig(app File, myID protocol.DeviceID, configPath string, e
 	cfg.Options.NATEnabled = false
 	cfg.Options.URAccepted = -1
 	cfg.Options.StartBrowser = false
+	cfg.Defaults.Ignores.Lines = append(cfg.Defaults.Ignores.Lines, ".obsidian/obsyncd-*")
 
 	self := cfg.Defaults.Device.Copy()
 	self.DeviceID = myID

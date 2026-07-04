@@ -37,6 +37,12 @@ type statusReply struct {
 	OracleDeviceID  string
 	OracleConnected bool
 	ManualConflicts []string
+	Pending         []pendingConflict
+}
+
+type pendingConflict struct {
+	Canonical string
+	Staged    string
 }
 
 type rescanArgs struct {
@@ -49,9 +55,20 @@ type rescanReply struct {
 	OK       bool
 }
 
-type conflictFile struct {
+type resolveArgs struct {
+	Path   string
+	Action string
+}
+
+type resolveReply struct {
 	Path string
-	Rel  string
+	OK   bool
+}
+
+type conflictFile struct {
+	Path   string
+	Rel    string
+	Staged string
 }
 
 type conflictBlock struct {
@@ -111,7 +128,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	files, err := scanConflicts(cfg.VaultPath)
+	files, err := loadPending(*socket, cfg.VaultPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -189,7 +206,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeMessage
 			return m, nil
 		}
-		if err := rescanPath(m.socket, m.files[m.cursor].Rel); err != nil {
+		if err := resolvePending(m.socket, m.files[m.cursor].Rel, "manual"); err != nil {
 			m.err = err
 			m.mode = modeMessage
 			return m, nil
@@ -272,18 +289,17 @@ func (m model) View() string {
 
 func (m model) diffView() string {
 	file := m.files[m.cursor]
-	bs, err := os.ReadFile(file.Path)
+	localBytes, err := os.ReadFile(file.Path)
 	if err != nil {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
-	blocks := parseConflictBlocks(string(bs))
-	if len(blocks) == 0 {
-		return "No conflict markers in file.\n\nesc back\n"
+	remoteBytes, err := os.ReadFile(file.Staged)
+	if err != nil {
+		return errorStyle.Render(err.Error()) + "\n"
 	}
-	block := blocks[0]
 	colWidth := max(20, (m.width-6)/2)
-	left := localStyle.Width(colWidth).Render(block.Local)
-	right := remoteStyle.Width(colWidth).Render(block.Remote)
+	left := localStyle.Width(colWidth).Render(string(localBytes))
+	right := remoteStyle.Width(colWidth).Render(string(remoteBytes))
 	header := titleStyle.Render(file.Rel) + "\n\n"
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	help := "\n\nL keep local  R keep remote  S submerge  M manual edit  esc back  q quit\n"
@@ -292,24 +308,7 @@ func (m model) diffView() string {
 
 func (m model) resolve(action string) model {
 	file := m.files[m.cursor]
-	bs, err := os.ReadFile(file.Path)
-	if err != nil {
-		m.err = err
-		m.mode = modeMessage
-		return m
-	}
-	next, changed := resolveContent(string(bs), action)
-	if !changed {
-		m.err = fmt.Errorf("no conflict markers in %s", file.Rel)
-		m.mode = modeMessage
-		return m
-	}
-	if err := atomicWrite(file.Path, []byte(next), 0o644); err != nil {
-		m.err = err
-		m.mode = modeMessage
-		return m
-	}
-	if err := rescanPath(m.socket, file.Rel); err != nil {
+	if err := resolvePending(m.socket, file.Rel, action); err != nil {
 		m.err = err
 		m.mode = modeMessage
 		return m
@@ -318,7 +317,7 @@ func (m model) resolve(action string) model {
 }
 
 func (m model) reload(message string) model {
-	files, err := scanConflicts(m.vault)
+	files, err := loadPending(m.socket, m.vault)
 	if err != nil {
 		m.err = err
 		m.mode = modeMessage
@@ -369,6 +368,27 @@ func scanConflicts(root string) ([]conflictFile, error) {
 		return nil
 	})
 	return files, err
+}
+
+func loadPending(socket, root string) ([]conflictFile, error) {
+	client, err := dial(socket)
+	if err != nil {
+		return nil, err
+	}
+	defer client.Close()
+	var reply statusReply
+	if err := client.Call("Daemon.Status", statusArgs{}, &reply); err != nil {
+		return nil, err
+	}
+	files := make([]conflictFile, 0, len(reply.Pending))
+	for _, p := range reply.Pending {
+		files = append(files, conflictFile{
+			Path:   filepath.Join(root, filepath.FromSlash(p.Canonical)),
+			Rel:    p.Canonical,
+			Staged: filepath.Join(root, filepath.FromSlash(p.Staged)),
+		})
+	}
+	return files, nil
 }
 
 func parseConflictBlocks(s string) []conflictBlock {
@@ -476,6 +496,16 @@ func rescanPath(socket, rel string) error {
 	defer client.Close()
 	var reply rescanReply
 	return callRescan(client, []string{rel}, &reply)
+}
+
+func resolvePending(socket, rel, action string) error {
+	client, err := dial(socket)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	var reply resolveReply
+	return client.Call("Daemon.Resolve", resolveArgs{Path: rel, Action: action}, &reply)
 }
 
 func callRescan(client *rpc.Client, paths []string, reply *rescanReply) error {
