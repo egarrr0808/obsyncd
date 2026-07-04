@@ -138,6 +138,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, fmt.Errorf("read pending conflicts: %w", err)
 	}
+	appCfg.StartPaused = len(pending) > 0
 
 	stCfg, err := appconfig.BuildSyncthingConfig(appCfg, myID, locations.Get(locations.ConfigFile), evLogger)
 	if err != nil {
@@ -145,10 +146,6 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	if len(pending) > 0 {
-		if err := setFolderPaused(stCfg, appconfig.DefaultFolderID, true); err != nil {
-			loggerCancel()
-			return nil, fmt.Errorf("pause folder with pending conflicts: %w", err)
-		}
 		for _, p := range pending {
 			fmt.Fprintf(os.Stderr, "OBSYNCD HOLD: %s awaiting user resolution; run obsyncctl\n", p.Canonical)
 		}

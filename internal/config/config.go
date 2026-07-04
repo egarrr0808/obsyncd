@@ -20,6 +20,7 @@ type File struct {
 	DeviceName  string       `yaml:"device_name"`
 	VaultPath   string       `yaml:"vault_path"`
 	RemoteNodes []RemoteNode `yaml:"remote_nodes"`
+	StartPaused bool         `yaml:"-"`
 }
 
 type RemoteNode struct {
@@ -134,6 +135,7 @@ func BuildSyncthingConfig(app File, myID protocol.DeviceID, configPath string, e
 	folder.FSWatcherEnabled = true
 	folder.RescanIntervalS = 3600
 	folder.MaxConflicts = 0
+	folder.Paused = app.StartPaused
 	cfg.Folders = []stconfig.FolderConfiguration{folder}
 
 	return stconfig.Wrap(configPath, cfg, myID, evLogger), nil
