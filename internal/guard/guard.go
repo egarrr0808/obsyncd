@@ -113,7 +113,11 @@ func (g *Guard) RunSnapshotScanner(ctx context.Context, interval time.Duration) 
 					continue
 				}
 				seen[rel] = sum
-				if _, err := os.Stat(g.snapshotPath(rel)); err == nil {
+				snapPath := g.snapshotPath(rel)
+				if _, err := os.Stat(snapPath); err == nil {
+					if err := g.stageChangedDirtyFile(ctx, rel); err != nil {
+						log.Printf("obsyncd conflict guard stage failed for %s: %v", rel, err)
+					}
 					continue
 				}
 				if err := g.snapshotLocal(rel); err != nil {
@@ -128,6 +132,41 @@ func (g *Guard) RunSnapshotScanner(ctx context.Context, interval time.Duration) 
 			}
 		}
 	}
+}
+
+func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
+	if g.Stager == nil || g.Controller == nil {
+		return nil
+	}
+	path, err := safeJoin(g.Root, rel)
+	if err != nil {
+		return err
+	}
+	localBefore, err := os.ReadFile(g.snapshotPath(rel))
+	if err != nil {
+		return err
+	}
+	remoteNow, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if string(localBefore) == string(remoteNow) {
+		return nil
+	}
+	tmpRemote, err := writeRemoteTemp(path, remoteNow)
+	if err != nil {
+		return err
+	}
+	if _, err := g.Stager.Stage(ctx, g.Folder, rel, tmpRemote); err != nil {
+		_ = os.Remove(tmpRemote)
+		return err
+	}
+	if err := atomicWrite(path, localBefore, 0o644); err != nil {
+		return err
+	}
+	_ = os.Remove(g.snapshotPath(rel))
+	log.Printf("OBSYNCD CONFLICT: %s awaiting user resolution; run obsyncctl", rel)
+	return g.Controller.Rescan(ctx, g.Folder, []string{rel})
 }
 
 func (g *Guard) snapshotLocal(rel string) error {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"obsyncd/internal/statestore"
 )
 
 type fakeController struct{ paths []string }
@@ -14,6 +16,22 @@ type fakeController struct{ paths []string }
 func (f *fakeController) Rescan(_ context.Context, _ string, paths []string) error {
 	f.paths = append(f.paths, paths...)
 	return nil
+}
+
+type fakeStager struct {
+	canonical string
+	content   string
+}
+
+func (f *fakeStager) Stage(_ context.Context, _, canonicalRel, artifactPath string) (statestore.Pending, error) {
+	bs, err := os.ReadFile(artifactPath)
+	if err != nil {
+		return statestore.Pending{}, err
+	}
+	f.canonical = canonicalRel
+	f.content = string(bs)
+	_ = os.Remove(artifactPath)
+	return statestore.Pending{Canonical: canonicalRel, Staged: "staged"}, nil
 }
 
 func TestDetectRemoteOverwriteCreatesCopiesAndMarker(t *testing.T) {
@@ -121,6 +139,60 @@ func TestSnapshotScannerCapturesChangedMarkdown(t *testing.T) {
 			cancel()
 			<-errs
 			t.Fatal("snapshot not captured")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSnapshotScannerStagesSecondChange(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := &fakeController{}
+	stager := &fakeStager{}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: ctrl, Stager: stager}
+	ctx, cancel := context.WithCancel(context.Background())
+	errs := make(chan error, 1)
+	go func() {
+		errs <- g.RunSnapshotScanner(ctx, 10*time.Millisecond)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	if err := os.WriteFile(path, []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if _, err := os.Stat(g.snapshotPath("note.md")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-errs
+			t.Fatal("snapshot not captured")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err := os.WriteFile(path, []byte("remote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for {
+		if stager.content == "remote\n" {
+			cancel()
+			<-errs
+			mustContain(t, path, "local\n")
+			if len(ctrl.paths) != 1 || ctrl.paths[0] != "note.md" {
+				t.Fatalf("rescans = %#v", ctrl.paths)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-errs
+			t.Fatalf("not staged: %#v", stager)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
