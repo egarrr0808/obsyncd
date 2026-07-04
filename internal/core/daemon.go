@@ -94,9 +94,14 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, fmt.Errorf("save syncthing config: %w", err)
 	}
+	cfgCtx, cfgCancel := context.WithCancel(ctx)
+	go func() {
+		_ = stCfg.Serve(cfgCtx)
+	}()
 
 	db, err := backend.Open(locations.Get(locations.Database), backend.TuningSmall)
 	if err != nil {
+		cfgCancel()
 		loggerCancel()
 		return nil, fmt.Errorf("open syncthing db: %w", err)
 	}
@@ -105,22 +110,26 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	})
 	if err != nil {
 		_ = db.Close()
+		cfgCancel()
 		loggerCancel()
 		return nil, err
 	}
 	if err := app.Start(); err != nil {
+		cfgCancel()
 		loggerCancel()
 		return nil, err
 	}
 	oracleID, oracleName, err := oracleDevice(appCfg)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
+		cfgCancel()
 		loggerCancel()
 		return nil, err
 	}
 	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
+		cfgCancel()
 		loggerCancel()
 		return nil, err
 	}
@@ -134,6 +143,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	go func() {
 		<-ctx.Done()
 		app.Stop(svcutil.ExitSuccess)
+		cfgCancel()
 		loggerCancel()
 	}()
 	return d, nil
