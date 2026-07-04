@@ -9,6 +9,7 @@ import (
 
 	appconfig "obsyncd/internal/config"
 	eventloop "obsyncd/internal/events"
+	"obsyncd/internal/guard"
 	"obsyncd/internal/interceptor"
 	"obsyncd/internal/ipc"
 
@@ -31,6 +32,16 @@ type Daemon struct {
 type Paths struct {
 	ConfigFile string
 	StateDir   string
+}
+
+type appController struct {
+	app *syncthing.App
+}
+
+func (c appController) Pause(context.Context, string) error  { return nil }
+func (c appController) Resume(context.Context, string) error { return nil }
+func (c appController) Rescan(_ context.Context, folder string, paths []string) error {
+	return c.app.Internals.ScanFolderSubdirs(folder, paths)
 }
 
 func DeviceID(configFile string) (string, error) {
@@ -126,6 +137,20 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, err
 	}
+	controller := appController{app: app}
+	conflictGuard := &guard.Guard{
+		Root:       appCfg.VaultPath,
+		StateDir:   paths.StateDir,
+		Folder:     appconfig.DefaultFolderID,
+		Logger:     evLogger,
+		Controller: controller,
+	}
+	go func() {
+		if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+	}()
+
 	rpcServer, err := ipc.Start(ctx, "", app, appconfig.DefaultFolderID, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
