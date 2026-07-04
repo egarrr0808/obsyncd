@@ -158,7 +158,7 @@ func (s *Server) setPaused(paused bool) error {
 
 func (s *Server) manualConflicts() []string {
 	if s.store == nil {
-		return scanManualConflicts(s.root)
+		return nil
 	}
 	pending := s.pendingConflicts()
 	out := make([]string, 0, len(pending))

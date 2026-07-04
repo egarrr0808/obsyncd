@@ -171,9 +171,11 @@ func runCommand(socket, configPath string, args []string) {
 		fmt.Printf("Connected: %t\n", reply.OracleConnected)
 		if len(reply.ManualConflicts) == 0 {
 			if cfg, err := appconfig.Load(configPath); err == nil {
-				if files, err := scanPendingDir(cfg.VaultPath); err == nil {
-					for _, file := range files {
-						reply.ManualConflicts = append(reply.ManualConflicts, file.Rel)
+				if cfg.NormalizedRole() != "hub" {
+					if files, err := scanPendingDir(cfg.VaultPath); err == nil {
+						for _, file := range files {
+							reply.ManualConflicts = append(reply.ManualConflicts, file.Rel)
+						}
 					}
 				}
 			}
