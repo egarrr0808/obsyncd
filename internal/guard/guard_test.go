@@ -34,6 +34,14 @@ func (f *fakeStager) Base(_ context.Context, _, path string) (string, bool, erro
 	return base, ok, nil
 }
 
+func (f *fakeStager) SaveBase(_ context.Context, _, path, content string) error {
+	if f.bases == nil {
+		f.bases = map[string]string{}
+	}
+	f.bases[path] = content
+	return nil
+}
+
 func (f *fakeStager) Stage(_ context.Context, _, canonicalRel, artifactPath string) (statestore.Pending, error) {
 	bs, err := os.ReadFile(artifactPath)
 	if err != nil {
@@ -210,6 +218,32 @@ func TestSnapshotScannerStagesSecondChange(t *testing.T) {
 			t.Fatalf("not staged: %#v", stager)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestStageChangedDirtyFileAcceptsRemoteOverCleanBase(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("remote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stager := &fakeStager{bases: map[string]string{"note.md": "base\n"}}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}, Stager: stager}
+	if err := atomicWrite(g.snapshotPath("note.md"), []byte("base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.stageChangedDirtyFile(context.Background(), "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if stager.canonical != "" {
+		t.Fatalf("staged clean remote update: %s", stager.canonical)
+	}
+	if stager.bases["note.md"] != "remote\n" {
+		t.Fatalf("base = %q", stager.bases["note.md"])
+	}
+	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot remains: %v", err)
 	}
 }
 

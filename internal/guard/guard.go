@@ -27,6 +27,7 @@ type Controller interface {
 
 type Stager interface {
 	Base(ctx context.Context, folder, path string) (string, bool, error)
+	SaveBase(ctx context.Context, folder, path, content string) error
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
 }
@@ -159,6 +160,12 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	}
 	if string(localBefore) == string(remoteNow) {
 		return nil
+	}
+	if base, ok, err := g.Stager.Base(ctx, g.Folder, rel); err != nil {
+		return err
+	} else if ok && base == string(localBefore) {
+		_ = os.Remove(g.snapshotPath(rel))
+		return g.Stager.SaveBase(ctx, g.Folder, rel, string(remoteNow))
 	}
 	if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 		return err
@@ -297,6 +304,12 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 	}
 
 	if g.Stager != nil {
+		if base, ok, err := g.Stager.Base(ctx, g.Folder, rel); err != nil {
+			return err
+		} else if ok && base == string(localBefore) {
+			_ = os.Remove(snapPath)
+			return g.Stager.SaveBase(ctx, g.Folder, rel, string(remoteNow))
+		}
 		if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 			return err
 		} else if pending {
