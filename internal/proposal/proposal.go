@@ -294,9 +294,10 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	if err := c.Store.SaveBase(ctx, c.Folder, ack.Path, string(bs)); err != nil {
 		return err
 	}
+	_ = os.Remove(filepath.Join(c.ProposalDir, "proposal-"+ack.ID+".json"))
 	_ = os.Remove(path)
 	if c.Controller != nil {
-		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(path)})
+		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(path), "proposal-" + ack.ID + ".json"})
 	}
 	log.Printf("OBSYNCD ACCEPTED: %s stored by hub", ack.Path)
 	return nil

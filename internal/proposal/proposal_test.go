@@ -136,3 +136,30 @@ func TestConflictIngestStoresServerBase(t *testing.T) {
 		t.Fatalf("base = %q %t", base, ok)
 	}
 }
+
+func TestAcceptedRemovesOriginalProposal(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "proposal-five.json"), Proposal{Type: "proposal", ID: "five"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "accepted-five.json"), Accepted{
+		Type: "accepted", ID: "five", TargetDevice: "client", Path: "note.md", ContentHash: hashString("done\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	if err := ingest.handleAccepted(context.Background(), filepath.Join(proposals, "accepted-five.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "proposal-five.json")); !os.IsNotExist(err) {
+		t.Fatalf("proposal remains: %v", err)
+	}
+}
