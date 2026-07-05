@@ -79,3 +79,29 @@ func TestHubConflictsStaleProposal(t *testing.T) {
 		t.Fatalf("conflict job missing: %v", err)
 	}
 }
+
+func TestHubConfirmsAlreadyMatchingProposal(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("same\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: statestore.New(root), Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "three", Device: "client", Path: "note.md",
+		BaseHash: "", ContentHash: hashString("same\n"), Content: "same\n",
+	}
+	pp := filepath.Join(proposals, "proposal-three.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "accepted-three.json")); err != nil {
+		t.Fatalf("accepted ack missing: %v", err)
+	}
+}

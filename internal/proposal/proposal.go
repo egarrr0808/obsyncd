@@ -70,7 +70,6 @@ type Submitter struct {
 	Store       Store
 	Controller  Controller
 	Interval    time.Duration
-	initialized bool
 }
 
 type Hub struct {
@@ -103,8 +102,7 @@ func (s *Submitter) Run(ctx context.Context) error {
 }
 
 func (s *Submitter) scan(ctx context.Context) error {
-	first := !s.initialized
-	err := walkMarkdown(s.Root, func(rel, path string) error {
+	return walkMarkdown(s.Root, func(rel, path string) error {
 		if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
 			return err
 		}
@@ -115,9 +113,6 @@ func (s *Submitter) scan(ctx context.Context) error {
 		base, ok, err := s.Store.Base(ctx, s.Folder, rel)
 		if err != nil {
 			return err
-		}
-		if !ok && first {
-			return s.Store.SaveBase(ctx, s.Folder, rel, string(bs))
 		}
 		if ok && hashString(base) == hashBytes(bs) {
 			return nil
@@ -135,8 +130,6 @@ func (s *Submitter) scan(ctx context.Context) error {
 		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
 		return writeJSON(filepath.Join(s.ProposalDir, "proposal-"+p.ID+".json"), p)
 	})
-	s.initialized = true
-	return err
 }
 
 func (h Hub) Run(ctx context.Context) error {
@@ -186,6 +179,25 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	serverHash := ""
 	if !serverMissing {
 		serverHash = hashBytes(server)
+	}
+	if serverHash == p.ContentHash {
+		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
+			return err
+		}
+		ack := Accepted{
+			Type: "accepted", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
+			ContentHash: p.ContentHash, Content: p.Content,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		}
+		if err := writeJSON(filepath.Join(h.ProposalDir, "accepted-"+p.ID+".json"), ack); err != nil {
+			return err
+		}
+		_ = os.Remove(proposalPath)
+		if h.Controller != nil {
+			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
+		}
+		log.Printf("OBSYNCD HUB: confirmed %s from %s", p.Path, short(p.Device))
+		return nil
 	}
 	if serverHash == p.BaseHash {
 		if err := atomicWrite(canonical, []byte(p.Content), 0o644); err != nil {
