@@ -102,10 +102,17 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 	pending := s.pendingConflicts()
 	localPending := s.localPending()
 	manual := pendingPaths(pending)
+	paused := s.folderPaused()
+	if paused && len(pending) == 0 && len(localPending) == 0 {
+		_ = s.setPaused(false)
+		paused = false
+	}
 	if state == "" && len(pending) > 0 {
 		state = "paused (pending resolution)"
 	} else if state == "" && len(localPending) > 0 {
 		state = "paused (awaiting hub approval)"
+	} else if state == "" && paused {
+		state = "paused"
 	}
 	*reply = StatusReply{
 		FolderID:        s.folderID,
@@ -177,6 +184,14 @@ func (s *Server) setPaused(paused bool) error {
 	}
 	waiter.Wait()
 	return s.cfg.Save()
+}
+
+func (s *Server) folderPaused() bool {
+	if s.cfg == nil {
+		return false
+	}
+	fcfg, ok := s.cfg.Folder(s.folderID)
+	return ok && fcfg.Paused
 }
 
 func (s *Server) manualConflicts() []string {
