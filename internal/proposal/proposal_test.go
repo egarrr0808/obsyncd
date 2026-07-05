@@ -163,3 +163,68 @@ func TestAcceptedRemovesOriginalProposal(t *testing.T) {
 		t.Fatalf("proposal remains: %v", err)
 	}
 }
+
+func TestConflictIngestIgnoresStaleConflict(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	job := Conflict{
+		Type: "conflict", ID: "six", TargetDevice: "client", Path: "note.md",
+		ProposalHash: hashString("old-client\n"), ServerContent: "server\n", ClientContent: "old-client\n",
+	}
+	jp := filepath.Join(proposals, "conflict-six.json")
+	if err := writeJSON(jp, job); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	if err := ingest.handle(context.Background(), jp, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(jp); !os.IsNotExist(err) {
+		t.Fatalf("stale conflict remains: %v", err)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("stale conflict staged: %#v", pending)
+	}
+}
+
+func TestHubRemovesAcceptedConflict(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conflict := Conflict{Type: "conflict", ID: "seven", TargetDevice: "client", Path: "note.md"}
+	if err := writeJSON(filepath.Join(proposals, "conflict-seven.json"), conflict); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: store, Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "eight", Device: "client", Path: "note.md",
+		BaseHash: hashString("server\n"), ContentHash: hashString("resolved\n"), Content: "resolved\n",
+	}
+	pp := filepath.Join(proposals, "proposal-eight.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-seven.json")); !os.IsNotExist(err) {
+		t.Fatalf("conflict remains: %v", err)
+	}
+}

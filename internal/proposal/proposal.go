@@ -196,6 +196,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		if h.Controller != nil {
 			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
 		}
+		h.removeConflicts(ctx, p.Path, p.Device)
 		log.Printf("OBSYNCD HUB: confirmed %s from %s", p.Path, short(p.Device))
 		return nil
 	}
@@ -219,6 +220,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 			_ = h.Controller.Rescan(ctx, h.Folder, []string{p.Path})
 			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
 		}
+		h.removeConflicts(ctx, p.Path, p.Device)
 		log.Printf("OBSYNCD HUB: accepted %s from %s", p.Path, short(p.Device))
 		return nil
 	}
@@ -311,10 +313,22 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	if err != nil {
 		return err
 	}
-	if _, err := os.Stat(canonical); os.IsNotExist(err) {
+	local, err := os.ReadFile(canonical)
+	if os.IsNotExist(err) {
 		if err := atomicWrite(canonical, []byte(job.ClientContent), 0o644); err != nil {
 			return err
 		}
+		local = []byte(job.ClientContent)
+	} else if err != nil {
+		return err
+	}
+	if job.ProposalHash != "" && hashBytes(local) != job.ProposalHash {
+		_ = os.Remove(jobPath)
+		if c.Controller != nil {
+			_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(jobPath)})
+		}
+		log.Printf("OBSYNCD CONFLICT: ignored stale conflict for %s", job.Path)
+		return nil
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(canonical), ".obsyncd-server-*")
 	if err != nil {
@@ -344,6 +358,31 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	}
 	log.Printf("OBSYNCD CONFLICT: %s differs from hub; run obsyncctl", job.Path)
 	return nil
+}
+
+func (h Hub) removeConflicts(ctx context.Context, rel, device string) {
+	entries, err := os.ReadDir(h.ProposalDir)
+	if err != nil {
+		return
+	}
+	var removed []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(h.ProposalDir, entry.Name())
+		var c Conflict
+		if err := readJSON(path, &c); err != nil {
+			continue
+		}
+		if c.Path == rel && c.TargetDevice == device {
+			_ = os.Remove(path)
+			removed = append(removed, entry.Name())
+		}
+	}
+	if len(removed) > 0 && h.Controller != nil {
+		_ = h.Controller.Rescan(ctx, h.ProposalFolder, removed)
+	}
 }
 
 func every(ctx context.Context, interval time.Duration, fn func(context.Context) error) error {
