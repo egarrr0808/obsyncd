@@ -28,6 +28,7 @@ type Store interface {
 	SaveBase(ctx context.Context, folder, path, content string) error
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
+	Pending(ctx context.Context) ([]statestore.Pending, error)
 }
 
 type Proposal struct {
@@ -308,7 +309,13 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	_ = os.Remove(filepath.Join(c.ProposalDir, "proposal-"+ack.ID+".json"))
 	_ = os.Remove(path)
 	if c.Controller != nil {
-		_ = c.Controller.Resume(ctx, c.Folder)
+		pending, err := c.Store.Pending(ctx)
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			_ = c.Controller.Resume(ctx, c.Folder)
+		}
 		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(path), "proposal-" + ack.ID + ".json"})
 	}
 	log.Printf("OBSYNCD ACCEPTED: %s stored by hub", ack.Path)

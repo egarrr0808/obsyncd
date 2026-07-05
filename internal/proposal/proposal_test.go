@@ -15,6 +15,14 @@ func (fakeController) Pause(context.Context, string) error            { return n
 func (fakeController) Resume(context.Context, string) error           { return nil }
 func (fakeController) Rescan(context.Context, string, []string) error { return nil }
 
+type countingController struct {
+	resume int
+}
+
+func (*countingController) Pause(context.Context, string) error            { return nil }
+func (c *countingController) Resume(context.Context, string) error         { c.resume++; return nil }
+func (*countingController) Rescan(context.Context, string, []string) error { return nil }
+
 func TestHubAcceptsFreshProposal(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
@@ -162,6 +170,38 @@ func TestAcceptedRemovesOriginalProposal(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(proposals, "proposal-five.json")); !os.IsNotExist(err) {
 		t.Fatalf("proposal remains: %v", err)
+	}
+}
+
+func TestAcceptedDoesNotResumeWithOtherPendingConflict(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	controller := &countingController{}
+	if err := os.WriteFile(filepath.Join(root, "done.md"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pendingArtifact := filepath.Join(root, "remote.tmp")
+	if err := os.WriteFile(pendingArtifact, []byte("server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(context.Background(), "obsidian", "blocked.md", pendingArtifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "accepted-nine.json"), Accepted{
+		Type: "accepted", ID: "nine", TargetDevice: "client", Path: "done.md", ContentHash: hashString("done\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: controller,
+	}
+	if err := ingest.handleAccepted(context.Background(), filepath.Join(proposals, "accepted-nine.json")); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resume != 0 {
+		t.Fatalf("resumed with pending conflict")
 	}
 }
 
