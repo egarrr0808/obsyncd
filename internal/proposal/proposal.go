@@ -142,6 +142,39 @@ func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string,
 	return writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
 }
 
+func LocalPending(proposalDir, deviceID string) ([]string, error) {
+	entries, err := os.ReadDir(proposalDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "proposal-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var p Proposal
+		if err := readJSON(filepath.Join(proposalDir, entry.Name()), &p); err != nil || p.Type != "proposal" || p.Device != deviceID {
+			continue
+		}
+		path := filepath.ToSlash(filepath.Clean(p.Path))
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	return out, nil
+}
+
+func hasLocalPending(proposalDir, deviceID string) bool {
+	paths, err := LocalPending(proposalDir, deviceID)
+	return err == nil && len(paths) > 0
+}
+
 func (h Hub) Run(ctx context.Context) error {
 	if h.Store == nil {
 		return errors.New("proposal hub store is nil")
@@ -313,7 +346,7 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 		if err != nil {
 			return err
 		}
-		if len(pending) == 0 {
+		if len(pending) == 0 && !hasLocalPending(c.ProposalDir, c.DeviceID) {
 			_ = c.Controller.Resume(ctx, c.Folder)
 		}
 		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(path), "proposal-" + ack.ID + ".json"})

@@ -39,6 +39,7 @@ type statusReply struct {
 	OracleConnected bool
 	ManualConflicts []string
 	Pending         []pendingConflict
+	LocalPending    []string
 }
 
 type pendingConflict struct {
@@ -183,6 +184,12 @@ func runCommand(socket, configPath string, args []string) {
 		if len(reply.ManualConflicts) > 0 {
 			fmt.Println("Awaiting User Resolution:")
 			for _, path := range reply.ManualConflicts {
+				fmt.Printf("  %s\n", path)
+			}
+		}
+		if len(reply.LocalPending) > 0 {
+			fmt.Println("Awaiting Hub Approval:")
+			for _, path := range reply.LocalPending {
 				fmt.Printf("  %s\n", path)
 			}
 		}

@@ -205,6 +205,57 @@ func TestAcceptedDoesNotResumeWithOtherPendingConflict(t *testing.T) {
 	}
 }
 
+func TestAcceptedDoesNotResumeWithOtherLocalProposal(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	controller := &countingController{}
+	if err := os.WriteFile(filepath.Join(root, "done.md"), []byte("done\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "proposal-other.json"), Proposal{
+		Type: "proposal", ID: "other", Device: "client", Path: "other.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "accepted-ten.json"), Accepted{
+		Type: "accepted", ID: "ten", TargetDevice: "client", Path: "done.md", ContentHash: hashString("done\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: controller,
+	}
+	if err := ingest.handleAccepted(context.Background(), filepath.Join(proposals, "accepted-ten.json")); err != nil {
+		t.Fatal(err)
+	}
+	if controller.resume != 0 {
+		t.Fatalf("resumed with another local proposal")
+	}
+}
+
+func TestLocalPendingListsOwnProposals(t *testing.T) {
+	proposals := t.TempDir()
+	if err := writeJSON(filepath.Join(proposals, "proposal-one.json"), Proposal{
+		Type: "proposal", ID: "one", Device: "client", Path: "note.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "proposal-two.json"), Proposal{
+		Type: "proposal", ID: "two", Device: "other", Path: "other.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := LocalPending(proposals, "client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 1 || paths[0] != "note.md" {
+		t.Fatalf("paths = %#v", paths)
+	}
+}
+
 func TestConflictIngestIgnoresStaleConflict(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()

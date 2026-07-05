@@ -202,17 +202,17 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		return nil, err
 	}
 	controller := appController{app: app, cfg: stCfg}
-	go func() {
-		if err := (eventloop.BaseCapture{
-			Logger: evLogger,
-			Folder: appconfig.DefaultFolderID,
-			Root:   appCfg.VaultPath,
-			Store:  store,
-		}).Run(ctx); err != nil && ctx.Err() == nil {
-			fmt.Fprintln(os.Stderr, err)
-		}
-	}()
 	if role == "hub" {
+		go func() {
+			if err := (eventloop.BaseCapture{
+				Logger: evLogger,
+				Folder: appconfig.DefaultFolderID,
+				Root:   appCfg.VaultPath,
+				Store:  store,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
 		go func() {
 			if err := (proposal.Hub{
 				Root:           appCfg.VaultPath,

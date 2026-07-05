@@ -11,6 +11,7 @@ type StatusReply struct {
 	OracleConnected bool
 	ManualConflicts []string
 	Pending         []PendingConflict
+	LocalPending    []string
 }
 
 type PendingConflict struct {

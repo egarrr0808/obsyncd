@@ -100,8 +100,11 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		return err
 	}
 	pending := s.pendingConflicts()
+	localPending := s.localPending()
 	if state == "" && len(pending) > 0 {
 		state = "paused (pending resolution)"
+	} else if state == "" && len(localPending) > 0 {
+		state = "paused (awaiting hub approval)"
 	}
 	*reply = StatusReply{
 		FolderID:        s.folderID,
@@ -112,6 +115,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		OracleConnected: s.app.Internals.IsConnectedTo(s.oracleID),
 		ManualConflicts: s.manualConflicts(),
 		Pending:         pending,
+		LocalPending:    localPending,
 	}
 	return nil
 }
@@ -143,7 +147,7 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 		}
 		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
 	}
-	if pending := s.pendingConflicts(); len(pending) == 0 && !resolvedByHub {
+	if pending := s.pendingConflicts(); len(pending) == 0 && !resolvedByHub && len(s.localPending()) == 0 {
 		_ = s.setPaused(false)
 	}
 	if !resolvedByHub {
@@ -199,6 +203,17 @@ func (s *Server) pendingConflicts() []PendingConflict {
 		out = append(out, PendingConflict{Canonical: p.Canonical, Staged: p.Staged})
 	}
 	return out
+}
+
+func (s *Server) localPending() []string {
+	if s.store == nil {
+		return nil
+	}
+	paths, err := proposal.LocalPending(s.proposals, s.deviceID)
+	if err != nil {
+		return nil
+	}
+	return paths
 }
 
 func scanManualConflicts(root string) []string {
