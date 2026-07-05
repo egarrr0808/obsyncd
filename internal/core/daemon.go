@@ -250,6 +250,11 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 				fmt.Fprintln(os.Stderr, err)
 			}
 		}()
+		go func() {
+			if err := conflictGuard.RunFSWatcher(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
 		conflictInterceptor := &interceptor.Interceptor{
 			Root:       appCfg.VaultPath,
 			Folder:     appconfig.DefaultFolderID,

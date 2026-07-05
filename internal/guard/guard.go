@@ -17,6 +17,7 @@ import (
 	"obsyncd/internal/proposal"
 	"obsyncd/internal/statestore"
 
+	"github.com/syncthing/notify"
 	stevents "github.com/syncthing/syncthing/lib/events"
 )
 
@@ -137,6 +138,34 @@ func (g *Guard) RunSnapshotScanner(ctx context.Context, interval time.Duration) 
 					delete(seen, rel)
 					_ = os.Remove(g.snapshotPath(rel))
 				}
+			}
+		}
+	}
+}
+
+func (g *Guard) RunFSWatcher(ctx context.Context) error {
+	if g.Controller == nil {
+		return fmt.Errorf("controller is nil")
+	}
+	if err := os.MkdirAll(g.snapshotDir(), 0o700); err != nil {
+		return err
+	}
+	events := make(chan notify.EventInfo, 128)
+	if err := notify.Watch(filepath.Join(g.Root, "..."), events, notify.Write, notify.Create, notify.Rename); err != nil {
+		return err
+	}
+	defer notify.Stop(events)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case ev := <-events:
+			rel := relFor(g.Root, ev.Path())
+			if !isMarkdown(rel) || isGenerated(rel) || isInternalRel(rel) {
+				continue
+			}
+			if err := g.snapshotLocal(ctx, rel); err != nil {
+				log.Printf("obsyncd conflict guard fs watch failed for %s: %v", rel, err)
 			}
 		}
 	}
