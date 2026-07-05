@@ -25,6 +25,7 @@ type Controller interface {
 }
 
 type Stager interface {
+	Base(ctx context.Context, folder, path string) (string, bool, error)
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
 }
@@ -194,6 +195,18 @@ func (g *Guard) snapshotLocal(ctx context.Context, rel string) error {
 	}
 	if strings.Contains(string(bs), "%%OBSYNCD_CONFLICT_START%%") {
 		return nil
+	}
+	if g.Stager != nil {
+		if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
+			return err
+		} else if pending {
+			return nil
+		}
+		if base, ok, err := g.Stager.Base(ctx, g.Folder, rel); err != nil {
+			return err
+		} else if ok && base == string(bs) {
+			return nil
+		}
 	}
 	if err := atomicWrite(g.snapshotPath(rel), bs, 0o600); err != nil {
 		return err

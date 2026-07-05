@@ -28,6 +28,7 @@ type Store interface {
 	SaveBase(ctx context.Context, folder, path, content string) error
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
+	ClearPending(ctx context.Context, folder, canonicalRel string) error
 	Pending(ctx context.Context) ([]statestore.Pending, error)
 }
 
@@ -80,6 +81,7 @@ type Hub struct {
 	Folder         string
 	ProposalFolder string
 	DeviceID       string
+	TargetDevices  []string
 	Store          Store
 	Controller     Controller
 	Interval       time.Duration
@@ -227,12 +229,8 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
 			return err
 		}
-		ack := Accepted{
-			Type: "accepted", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
-			ContentHash: p.ContentHash, Content: p.Content,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		if err := writeJSON(filepath.Join(h.ProposalDir, "accepted-"+p.ID+".json"), ack); err != nil {
+		created := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := h.writeAccepted(ctx, p, p.Content, p.ContentHash, created); err != nil {
 			return err
 		}
 		_ = os.Remove(proposalPath)
@@ -250,12 +248,8 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
 			return err
 		}
-		ack := Accepted{
-			Type: "accepted", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
-			ContentHash: p.ContentHash, Content: p.Content,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		if err := writeJSON(filepath.Join(h.ProposalDir, "accepted-"+p.ID+".json"), ack); err != nil {
+		created := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := h.writeAccepted(ctx, p, p.Content, p.ContentHash, created); err != nil {
 			return err
 		}
 		_ = os.Remove(proposalPath)
@@ -282,6 +276,43 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	}
 	log.Printf("OBSYNCD HUB: conflict %s for %s; waiting client resolution", p.Path, short(p.Device))
 	return nil
+}
+
+func (h Hub) writeAccepted(ctx context.Context, p Proposal, content, contentHash, created string) error {
+	targets := h.acceptTargets(p.Device)
+	var names []string
+	for _, target := range targets {
+		ack := Accepted{
+			Type: "accepted", ID: p.ID, TargetDevice: target, Path: p.Path,
+			ContentHash: contentHash, Content: content,
+			CreatedAt: created,
+		}
+		name := "accepted-" + deviceKey(target) + "-" + p.ID + ".json"
+		if err := writeJSON(filepath.Join(h.ProposalDir, name), ack); err != nil {
+			return err
+		}
+		names = append(names, name)
+	}
+	if h.Controller != nil {
+		_ = h.Controller.Rescan(ctx, h.ProposalFolder, names)
+	}
+	return nil
+}
+
+func (h Hub) acceptTargets(proposer string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, target := range append([]string{proposer}, h.TargetDevices...) {
+		if target == "" || target == h.DeviceID {
+			continue
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		out = append(out, target)
+	}
+	return out
 }
 
 func (c ConflictIngest) Run(ctx context.Context) error {
@@ -337,6 +368,9 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 		return nil
 	}
 	if err := c.Store.SaveBase(ctx, c.Folder, ack.Path, string(bs)); err != nil {
+		return err
+	}
+	if err := c.Store.ClearPending(ctx, c.Folder, ack.Path); err != nil {
 		return err
 	}
 	_ = os.Remove(filepath.Join(c.ProposalDir, "proposal-"+ack.ID+".json"))
@@ -502,6 +536,14 @@ func short(id string) string {
 		return id
 	}
 	return id[:6]
+}
+
+func deviceKey(id string) string {
+	hash := hashString(id)
+	if len(hash) < 12 {
+		return hash
+	}
+	return hash[:12]
 }
 
 func validateRel(rel string) error {

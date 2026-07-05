@@ -91,6 +91,30 @@ func TestStageIsIdempotentForExistingPending(t *testing.T) {
 	}
 }
 
+func TestClearPendingRemovesMetadataAndStagedFile(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	artifact := filepath.Join(root, "remote.tmp")
+	mustWrite(t, artifact, "remote\n")
+	p, err := store.Stage(context.Background(), "obsidian", "note.md", artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ClearPending(context.Background(), "obsidian", "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(p.Staged))); !os.IsNotExist(err) {
+		t.Fatalf("staged remains: %v", err)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending remains: %#v", pending)
+	}
+}
+
 func TestResolveDeletedCanonicalKeepLocalDeletion(t *testing.T) {
 	root := t.TempDir()
 	store := New(root)

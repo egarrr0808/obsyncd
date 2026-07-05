@@ -220,6 +220,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 				Folder:         appconfig.DefaultFolderID,
 				ProposalFolder: appconfig.ProposalFolderID,
 				DeviceID:       myID.String(),
+				TargetDevices:  remoteDeviceIDs(appCfg),
 				Store:          store,
 				Controller:     controller,
 				Interval:       time.Second,
@@ -361,6 +362,16 @@ func oracleDevice(cfg appconfig.File) (protocol.DeviceID, string, error) {
 	}
 	id, err := protocol.DeviceIDFromString(cfg.RemoteNodes[0].DeviceID)
 	return id, cfg.RemoteNodes[0].Name, err
+}
+
+func remoteDeviceIDs(cfg appconfig.File) []string {
+	var out []string
+	for _, node := range cfg.RemoteNodes {
+		if strings.TrimSpace(node.DeviceID) != "" {
+			out = append(out, strings.TrimSpace(node.DeviceID))
+		}
+	}
+	return out
 }
 
 func ensureSyncIgnores(root string) error {

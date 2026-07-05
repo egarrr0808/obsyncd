@@ -23,6 +23,15 @@ func (f *fakeController) Rescan(_ context.Context, _ string, paths []string) err
 type fakeStager struct {
 	canonical string
 	content   string
+	bases     map[string]string
+}
+
+func (f *fakeStager) Base(_ context.Context, _, path string) (string, bool, error) {
+	if f.bases == nil {
+		return "", false, nil
+	}
+	base, ok := f.bases[path]
+	return base, ok, nil
 }
 
 func (f *fakeStager) Stage(_ context.Context, _, canonicalRel, artifactPath string) (statestore.Pending, error) {
@@ -201,6 +210,23 @@ func TestSnapshotScannerStagesSecondChange(t *testing.T) {
 			t.Fatalf("not staged: %#v", stager)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestSnapshotLocalSkipsCleanBase(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stager := &fakeStager{bases: map[string]string{"note.md": "base\n"}}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}, Stager: stager}
+	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
+		t.Fatalf("clean base created snapshot: %v", err)
 	}
 }
 

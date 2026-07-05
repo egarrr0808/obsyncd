@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"obsyncd/internal/statestore"
@@ -52,7 +53,9 @@ func TestHubAcceptsFreshProposal(t *testing.T) {
 		t.Fatalf("content = %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(proposals, "accepted-one.json")); err != nil {
-		t.Fatalf("accepted ack missing: %v", err)
+		if _, err := os.Stat(filepath.Join(proposals, "accepted-"+deviceKey("client")+"-one.json")); err != nil {
+			t.Fatalf("accepted ack missing: %v", err)
+		}
 	}
 }
 
@@ -111,7 +114,50 @@ func TestHubConfirmsAlreadyMatchingProposal(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(proposals, "accepted-three.json")); err != nil {
-		t.Fatalf("accepted ack missing: %v", err)
+		if _, err := os.Stat(filepath.Join(proposals, "accepted-"+deviceKey("client")+"-three.json")); err != nil {
+			t.Fatalf("accepted ack missing: %v", err)
+		}
+	}
+}
+
+func TestHubWritesAcceptedForEveryClient(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", TargetDevices: []string{"client-a", "client-b"}, Store: statestore.New(root), Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "fanout", Device: "client-a", Path: "note.md",
+		BaseHash: hashString("base\n"), ContentHash: hashString("next\n"), Content: "next\n",
+	}
+	pp := filepath.Join(proposals, "proposal-fanout.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"accepted-" + deviceKey("client-a") + "-fanout.json", "accepted-" + deviceKey("client-b") + "-fanout.json"} {
+		if _, err := os.Stat(filepath.Join(proposals, name)); err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+	}
+	count := 0
+	entries, err := os.ReadDir(proposals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "accepted-") {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("accepted count = %d", count)
 	}
 }
 

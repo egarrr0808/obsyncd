@@ -79,6 +79,17 @@ func (s *Store) HasPending(_ context.Context, _, canonicalRel string) (bool, err
 	return ok, err
 }
 
+func (s *Store) ClearPending(_ context.Context, _, canonicalRel string) error {
+	p, ok, err := s.pending(canonicalRel)
+	if err != nil || !ok {
+		return err
+	}
+	if stagedPath, err := safeJoin(s.Root, filepath.FromSlash(p.Staged)); err == nil {
+		_ = os.Remove(stagedPath)
+	}
+	return os.Remove(s.pendingPath(canonicalRel))
+}
+
 func (s *Store) Pending(_ context.Context) ([]Pending, error) {
 	dir := s.pendingDir()
 	entries, err := os.ReadDir(dir)
