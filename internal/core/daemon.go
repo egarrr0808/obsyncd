@@ -119,6 +119,16 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	if err := ensureSyncIgnores(appCfg.VaultPath); err != nil {
 		return nil, err
 	}
+	role := appCfg.NormalizedRole()
+	if role == "client" {
+		reset, err := resetLegacyClientBases(paths.StateDir, appCfg.VaultPath)
+		if err != nil {
+			return nil, err
+		}
+		if reset {
+			fmt.Fprintln(os.Stderr, "OBSYNCD MIGRATION: cleared legacy client base snapshots; Markdown files will be rechecked against hub")
+		}
+	}
 	if err := locations.SetBaseDir(locations.ConfigBaseDir, paths.StateDir); err != nil {
 		return nil, err
 	}
@@ -143,7 +153,6 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 		return nil, fmt.Errorf("read pending conflicts: %w", err)
 	}
-	role := appCfg.NormalizedRole()
 	appCfg.StartPaused = role == "client" && len(pending) > 0
 
 	stCfg, err := appconfig.BuildSyncthingConfig(appCfg, myID, locations.Get(locations.ConfigFile), evLogger)
@@ -386,4 +395,27 @@ func ensureSyncIgnores(root string) error {
 		return err
 	}
 	return nil
+}
+
+func resetLegacyClientBases(stateDir, vaultRoot string) (bool, error) {
+	if stateDir == "" || vaultRoot == "" {
+		return false, nil
+	}
+	marker := filepath.Join(stateDir, "client-bases-v2")
+	if _, err := os.Stat(marker); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	baseDir := filepath.Join(vaultRoot, ".obsidian", "obsyncd-bases")
+	if err := os.RemoveAll(baseDir); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return false, err
+	}
+	if err := os.WriteFile(marker, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o600); err != nil {
+		return false, err
+	}
+	return true, nil
 }
