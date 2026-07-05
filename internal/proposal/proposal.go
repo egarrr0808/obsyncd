@@ -333,6 +333,9 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 		_ = os.Remove(tmpName)
 		return err
 	}
+	if err := c.Store.SaveBase(ctx, c.Folder, job.Path, job.ServerContent); err != nil {
+		return err
+	}
 	_ = os.Remove(jobPath)
 	if c.Controller != nil {
 		_ = c.Controller.Pause(ctx, c.Folder)

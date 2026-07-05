@@ -134,6 +134,30 @@ func TestResolveDeletedCanonicalRestoreRemote(t *testing.T) {
 	}
 }
 
+func TestResolveLocalDoesNotAdvanceBase(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "local\n")
+	if err := store.SaveBase(context.Background(), "obsidian", "note.md", "base\n"); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-REMOTE.md")
+	mustWrite(t, artifact, "remote\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "local"); err != nil {
+		t.Fatal(err)
+	}
+	base, ok, err := store.Base(context.Background(), "obsidian", "note.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || base != "base\n" {
+		t.Fatalf("base advanced: %q %t", base, ok)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -196,6 +196,21 @@ func runCommand(socket, configPath string, args []string) {
 		if len(reply.Paths) > 0 {
 			fmt.Printf("Paths: %v\n", reply.Paths)
 		}
+	case "resolve":
+		if len(args) != 3 {
+			usage()
+			os.Exit(2)
+		}
+		if err := validateResolveAction(args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		var reply resolveReply
+		if err := client.Call("Daemon.Resolve", resolveArgs{Path: args[1], Action: args[2]}, &reply); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Printf("Resolved: %s (%s)\n", reply.Path, args[2])
 	default:
 		usage()
 		os.Exit(2)
@@ -547,6 +562,9 @@ func rescanPath(socket, rel string) error {
 }
 
 func resolvePending(socket, rel, action string) error {
+	if err := validateResolveAction(action); err != nil {
+		return err
+	}
 	client, err := dial(socket)
 	if err != nil {
 		return err
@@ -554,6 +572,15 @@ func resolvePending(socket, rel, action string) error {
 	defer client.Close()
 	var reply resolveReply
 	return client.Call("Daemon.Resolve", resolveArgs{Path: rel, Action: action}, &reply)
+}
+
+func validateResolveAction(action string) error {
+	switch action {
+	case "local", "remote", "submerge", "manual":
+		return nil
+	default:
+		return fmt.Errorf("unknown resolve action: %s", action)
+	}
 }
 
 func callRescan(client *rpc.Client, paths []string, reply *rescanReply) error {
@@ -569,7 +596,7 @@ func dial(socket string) (*rpc.Client, error) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: obsyncctl [-config path] [-socket path] [status|rescan [path...]]")
+	fmt.Fprintln(os.Stderr, "usage: obsyncctl [-config path] [-socket path] [status|rescan [path...]|resolve <path> <local|remote|submerge|manual>]")
 }
 
 func defaultSocketPath() string {

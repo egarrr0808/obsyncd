@@ -159,8 +159,10 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 	}
 	_ = os.Remove(stagedPath)
 	_ = os.Remove(s.pendingPath(canonicalRel))
-	if err := s.SaveBase(ctx, folder, canonicalRel, string(next)); err != nil {
-		return "", err
+	if action == "remote" {
+		if err := s.SaveBase(ctx, folder, canonicalRel, string(next)); err != nil {
+			return "", err
+		}
 	}
 	return filepath.ToSlash(filepath.Clean(canonicalRel)), nil
 }

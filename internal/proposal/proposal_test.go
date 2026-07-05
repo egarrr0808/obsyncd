@@ -105,3 +105,34 @@ func TestHubConfirmsAlreadyMatchingProposal(t *testing.T) {
 		t.Fatalf("accepted ack missing: %v", err)
 	}
 }
+
+func TestConflictIngestStoresServerBase(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("client\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	job := Conflict{
+		Type: "conflict", ID: "four", TargetDevice: "client", Path: "note.md",
+		ServerContent: "server\n", ClientContent: "client\n",
+	}
+	jp := filepath.Join(proposals, "conflict-four.json")
+	if err := writeJSON(jp, job); err != nil {
+		t.Fatal(err)
+	}
+	if err := ingest.handle(context.Background(), jp, job); err != nil {
+		t.Fatal(err)
+	}
+	base, ok, err := store.Base(context.Background(), "obsidian", "note.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || base != "server\n" {
+		t.Fatalf("base = %q %t", base, ok)
+	}
+}
