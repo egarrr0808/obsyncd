@@ -338,7 +338,7 @@ func (m model) diffView() string {
 	right := remoteStyle.Width(colWidth).Render(string(remoteBytes))
 	header := titleStyle.Render(file.Rel) + "\n\n"
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	help := "\n\nL keep local  R keep remote  S submerge  M manual edit  esc back  q quit\n"
+	help := "\n\nL keep this laptop  R keep hub  S submerge  M manual edit  esc back  q quit\n"
 	return header + body + help
 }
 

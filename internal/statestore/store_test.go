@@ -182,6 +182,48 @@ func TestResolveLocalDoesNotAdvanceBase(t *testing.T) {
 	}
 }
 
+func TestResolveLocalKeepsCanonicalLaptopContent(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "this laptop\n")
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-HUB.md")
+	mustWrite(t, artifact, "hub\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "local"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "this laptop\n" {
+		t.Fatalf("local did not keep this laptop content: %q", got)
+	}
+}
+
+func TestResolveRemoteKeepsHubContent(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "this laptop\n")
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-HUB.md")
+	mustWrite(t, artifact, "hub\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "remote"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hub\n" {
+		t.Fatalf("remote did not keep hub content: %q", got)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
