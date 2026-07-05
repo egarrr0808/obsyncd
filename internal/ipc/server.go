@@ -99,6 +99,10 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 	if err != nil {
 		return err
 	}
+	pending := s.pendingConflicts()
+	if state == "" && len(pending) > 0 {
+		state = "paused (pending resolution)"
+	}
 	*reply = StatusReply{
 		FolderID:        s.folderID,
 		FolderState:     state,
@@ -107,7 +111,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		OracleDeviceID:  s.oracleID.String(),
 		OracleConnected: s.app.Internals.IsConnectedTo(s.oracleID),
 		ManualConflicts: s.manualConflicts(),
-		Pending:         s.pendingConflicts(),
+		Pending:         pending,
 	}
 	return nil
 }
