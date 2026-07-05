@@ -107,30 +107,38 @@ func (s *Submitter) scan(ctx context.Context) error {
 		if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
 			return err
 		}
-		bs, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		base, ok, err := s.Store.Base(ctx, s.Folder, rel)
-		if err != nil {
-			return err
-		}
-		if ok && hashString(base) == hashBytes(bs) {
-			return nil
-		}
-		baseHash := ""
-		if ok {
-			baseHash = hashString(base)
-		}
-		content := string(bs)
-		p := Proposal{
-			Type: "proposal", Device: s.DeviceID, Path: filepath.ToSlash(rel),
-			BaseHash: baseHash, ContentHash: hashString(content), Content: content,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-		}
-		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
-		return writeJSON(filepath.Join(s.ProposalDir, "proposal-"+p.ID+".json"), p)
+		return SubmitPath(ctx, s.Root, s.ProposalDir, s.Folder, s.DeviceID, s.Store, rel)
 	})
+}
+
+func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string, store Store, rel string) error {
+	path, err := safeJoin(root, rel)
+	if err != nil {
+		return err
+	}
+	bs, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	base, ok, err := store.Base(ctx, folder, rel)
+	if err != nil {
+		return err
+	}
+	if ok && hashString(base) == hashBytes(bs) {
+		return nil
+	}
+	baseHash := ""
+	if ok {
+		baseHash = hashString(base)
+	}
+	content := string(bs)
+	p := Proposal{
+		Type: "proposal", Device: deviceID, Path: filepath.ToSlash(rel),
+		BaseHash: baseHash, ContentHash: hashString(content), Content: content,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
+	return writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
 }
 
 func (h Hub) Run(ctx context.Context) error {

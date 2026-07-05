@@ -285,7 +285,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	if role == "hub" {
 		ipcStore = nil
 	}
-	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, ipcStore, oracleID, oracleName)
+	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, appCfg.ProposalPath, myID.String(), ipcStore, oracleID, oracleName)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
 		cfgCancel()

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"obsyncd/internal/proposal"
 	"obsyncd/internal/statestore"
 
 	stconfig "github.com/syncthing/syncthing/lib/config"
@@ -17,15 +18,17 @@ import (
 )
 
 type Server struct {
-	app      *syncthing.App
-	cfg      stconfig.Wrapper
-	folderID string
-	oracleID protocol.DeviceID
-	oracle   string
-	root     string
-	store    *statestore.Store
-	socket   string
-	listener net.Listener
+	app       *syncthing.App
+	cfg       stconfig.Wrapper
+	folderID  string
+	oracleID  protocol.DeviceID
+	oracle    string
+	root      string
+	proposals string
+	deviceID  string
+	store     *statestore.Store
+	socket    string
+	listener  net.Listener
 }
 
 func DefaultSocketPath() string {
@@ -39,7 +42,7 @@ func DefaultSocketPath() string {
 	return filepath.Join(dir, "obsyncd", "obsyncd.sock")
 }
 
-func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.Wrapper, folderID, root string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
+func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.Wrapper, folderID, root, proposalDir, deviceID string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
 	if socket == "" {
 		socket = DefaultSocketPath()
 	}
@@ -60,15 +63,17 @@ func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.
 	}
 
 	s := &Server{
-		app:      app,
-		cfg:      cfg,
-		folderID: folderID,
-		oracleID: oracleID,
-		oracle:   oracleName,
-		root:     root,
-		store:    store,
-		socket:   socket,
-		listener: ln,
+		app:       app,
+		cfg:       cfg,
+		folderID:  folderID,
+		oracleID:  oracleID,
+		oracle:    oracleName,
+		root:      root,
+		proposals: proposalDir,
+		deviceID:  deviceID,
+		store:     store,
+		socket:    socket,
+		listener:  ln,
 	}
 	rpcServer := rpc.NewServer()
 	if err := rpcServer.RegisterName("Daemon", s); err != nil {
@@ -128,6 +133,12 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 		return err
 	}
 	resolvedByHub := args.Action == "local" || args.Action == "submerge" || args.Action == "manual"
+	if resolvedByHub {
+		if err := proposal.SubmitPath(context.Background(), s.root, s.proposals, s.folderID, s.deviceID, s.store, path); err != nil {
+			return err
+		}
+		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
+	}
 	if pending := s.pendingConflicts(); len(pending) == 0 && !resolvedByHub {
 		_ = s.setPaused(false)
 	}
