@@ -101,6 +101,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 	}
 	pending := s.pendingConflicts()
 	localPending := s.localPending()
+	manual := pendingPaths(pending)
 	if state == "" && len(pending) > 0 {
 		state = "paused (pending resolution)"
 	} else if state == "" && len(localPending) > 0 {
@@ -113,7 +114,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		OracleName:      s.oracle,
 		OracleDeviceID:  s.oracleID.String(),
 		OracleConnected: s.app.Internals.IsConnectedTo(s.oracleID),
-		ManualConflicts: s.manualConflicts(),
+		ManualConflicts: manual,
 		Pending:         pending,
 		LocalPending:    localPending,
 	}
@@ -182,12 +183,7 @@ func (s *Server) manualConflicts() []string {
 	if s.store == nil {
 		return nil
 	}
-	pending := s.pendingConflicts()
-	out := make([]string, 0, len(pending))
-	for _, p := range pending {
-		out = append(out, p.Canonical)
-	}
-	return out
+	return pendingPaths(s.pendingConflicts())
 }
 
 func (s *Server) pendingConflicts() []PendingConflict {
@@ -214,6 +210,14 @@ func (s *Server) localPending() []string {
 		return nil
 	}
 	return paths
+}
+
+func pendingPaths(pending []PendingConflict) []string {
+	out := make([]string, 0, len(pending))
+	for _, p := range pending {
+		out = append(out, p.Canonical)
+	}
+	return out
 }
 
 func scanManualConflicts(root string) []string {
