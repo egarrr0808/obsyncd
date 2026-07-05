@@ -32,6 +32,10 @@ type Store interface {
 	Pending(ctx context.Context) ([]statestore.Pending, error)
 }
 
+type BaseStore interface {
+	Base(ctx context.Context, folder, path string) (string, bool, error)
+}
+
 type Proposal struct {
 	Type        string `json:"type"`
 	ID          string `json:"id"`
@@ -114,7 +118,7 @@ func (s *Submitter) scan(ctx context.Context) error {
 	})
 }
 
-func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string, store Store, rel string) error {
+func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string, store BaseStore, rel string) error {
 	path, err := safeJoin(root, rel)
 	if err != nil {
 		return err

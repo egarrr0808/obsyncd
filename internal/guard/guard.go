@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"obsyncd/internal/diffmerge"
+	"obsyncd/internal/proposal"
 	"obsyncd/internal/statestore"
 
 	stevents "github.com/syncthing/syncthing/lib/events"
@@ -34,6 +35,9 @@ type Guard struct {
 	Root           string
 	StateDir       string
 	Folder         string
+	ProposalFolder string
+	ProposalDir    string
+	DeviceID       string
 	Logger         stevents.Logger
 	Controller     Controller
 	Stager         Stager
@@ -159,6 +163,9 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 		return err
 	} else if pending {
+		if err := g.Controller.Pause(ctx, g.Folder); err != nil {
+			return err
+		}
 		if err := atomicWrite(path, localBefore, 0o644); err != nil {
 			return err
 		}
@@ -171,6 +178,9 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	}
 	if _, err := g.Stager.Stage(ctx, g.Folder, rel, tmpRemote); err != nil {
 		_ = os.Remove(tmpRemote)
+		return err
+	}
+	if err := g.Controller.Pause(ctx, g.Folder); err != nil {
 		return err
 	}
 	if err := atomicWrite(path, localBefore, 0o644); err != nil {
@@ -213,7 +223,18 @@ func (g *Guard) snapshotLocal(ctx context.Context, rel string) error {
 	}
 	if g.Controller != nil {
 		log.Printf("OBSYNCD HOLD: %s changed locally; sync paused, run obsyncctl to approve", rel)
-		return g.Controller.Pause(ctx, g.Folder)
+		if err := g.Controller.Pause(ctx, g.Folder); err != nil {
+			return err
+		}
+		if g.ProposalDir != "" && g.DeviceID != "" && g.Stager != nil {
+			if err := proposal.SubmitPath(ctx, g.Root, g.ProposalDir, g.Folder, g.DeviceID, g.Stager, rel); err != nil {
+				return err
+			}
+			if g.ProposalFolder != "" {
+				_ = g.Controller.Rescan(ctx, g.ProposalFolder, nil)
+			}
+		}
+		return nil
 	}
 	return nil
 }
@@ -279,6 +300,9 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 		if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 			return err
 		} else if pending {
+			if err := g.Controller.Pause(ctx, g.Folder); err != nil {
+				return err
+			}
 			if err := atomicWrite(path, localBefore, 0o644); err != nil {
 				return err
 			}
@@ -291,6 +315,9 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 		}
 		if _, err := g.Stager.Stage(ctx, g.Folder, rel, tmpRemote); err != nil {
 			_ = os.Remove(tmpRemote)
+			return err
+		}
+		if err := g.Controller.Pause(ctx, g.Folder); err != nil {
 			return err
 		}
 		if err := atomicWrite(path, localBefore, 0o644); err != nil {

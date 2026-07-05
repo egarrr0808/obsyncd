@@ -230,12 +230,15 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		}()
 	} else {
 		conflictGuard := &guard.Guard{
-			Root:       appCfg.VaultPath,
-			StateDir:   paths.StateDir,
-			Folder:     appconfig.DefaultFolderID,
-			Logger:     evLogger,
-			Controller: controller,
-			Stager:     store,
+			Root:           appCfg.VaultPath,
+			StateDir:       paths.StateDir,
+			Folder:         appconfig.DefaultFolderID,
+			ProposalFolder: appconfig.ProposalFolderID,
+			ProposalDir:    appCfg.ProposalPath,
+			DeviceID:       myID.String(),
+			Logger:         evLogger,
+			Controller:     controller,
+			Stager:         store,
 		}
 		go func() {
 			if err := conflictGuard.Run(ctx); err != nil && ctx.Err() == nil {
