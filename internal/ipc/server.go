@@ -127,11 +127,14 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 	if err != nil {
 		return err
 	}
-	if pending := s.pendingConflicts(); len(pending) == 0 {
+	resolvedByHub := args.Action == "local" || args.Action == "submerge" || args.Action == "manual"
+	if pending := s.pendingConflicts(); len(pending) == 0 && !resolvedByHub {
 		_ = s.setPaused(false)
 	}
-	if err := s.app.Internals.ScanFolderSubdirs(s.folderID, []string{path}); err != nil {
-		return err
+	if !resolvedByHub {
+		if err := s.app.Internals.ScanFolderSubdirs(s.folderID, []string{path}); err != nil {
+			return err
+		}
 	}
 	*reply = ResolveReply{Path: path, OK: true}
 	return nil

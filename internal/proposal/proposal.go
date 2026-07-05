@@ -19,6 +19,7 @@ import (
 
 type Controller interface {
 	Pause(ctx context.Context, folder string) error
+	Resume(ctx context.Context, folder string) error
 	Rescan(ctx context.Context, folder string, paths []string) error
 }
 
@@ -299,6 +300,7 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	_ = os.Remove(filepath.Join(c.ProposalDir, "proposal-"+ack.ID+".json"))
 	_ = os.Remove(path)
 	if c.Controller != nil {
+		_ = c.Controller.Resume(ctx, c.Folder)
 		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(path), "proposal-" + ack.ID + ".json"})
 	}
 	log.Printf("OBSYNCD ACCEPTED: %s stored by hub", ack.Path)

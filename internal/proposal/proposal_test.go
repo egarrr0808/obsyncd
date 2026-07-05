@@ -12,6 +12,7 @@ import (
 type fakeController struct{}
 
 func (fakeController) Pause(context.Context, string) error            { return nil }
+func (fakeController) Resume(context.Context, string) error           { return nil }
 func (fakeController) Rescan(context.Context, string, []string) error { return nil }
 
 func TestHubAcceptsFreshProposal(t *testing.T) {
