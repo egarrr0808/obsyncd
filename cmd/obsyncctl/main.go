@@ -340,7 +340,7 @@ func (m model) View() string {
 			if i == m.cursor {
 				prefix = cursorStyle.Render("> ")
 			}
-			b.WriteString(prefix + file.Rel + "\n")
+			b.WriteString(prefix + file.Label() + "\n")
 		}
 		b.WriteString("\nenter open  q quit\n")
 		return b.String()
@@ -463,14 +463,11 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 		})
 	}
 	for _, g := range reply.GlobalConflicts {
-		if hasConflict(files, g.Path) {
-			continue
-		}
 		files = append(files, conflictFile{
 			Path:          filepath.Join(root, filepath.FromSlash(g.Path)),
 			Rel:           g.Path,
 			Global:        true,
-			ServerContent: g.ServerContent,
+			ServerContent: g.ClientContent,
 			TargetDevice:  g.TargetDevice,
 		})
 	}
@@ -487,6 +484,13 @@ func hasConflict(files []conflictFile, rel string) bool {
 		}
 	}
 	return false
+}
+
+func (f conflictFile) Label() string {
+	if !f.Global || f.TargetDevice == "" {
+		return f.Rel
+	}
+	return f.Rel + " [shared " + shortDevice(f.TargetDevice) + "]"
 }
 
 func scanPendingDir(root string) ([]conflictFile, error) {
