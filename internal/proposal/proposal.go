@@ -70,13 +70,14 @@ type Accepted struct {
 }
 
 type Submitter struct {
-	Root        string
-	ProposalDir string
-	Folder      string
-	DeviceID    string
-	Store       Store
-	Controller  Controller
-	Interval    time.Duration
+	Root           string
+	ProposalDir    string
+	ProposalFolder string
+	Folder         string
+	DeviceID       string
+	Store          Store
+	Controller     Controller
+	Interval       time.Duration
 }
 
 type Hub struct {
@@ -115,37 +116,54 @@ func (s *Submitter) scan(ctx context.Context) error {
 		if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
 			return err
 		}
-		return SubmitPath(ctx, s.Root, s.ProposalDir, s.Folder, s.DeviceID, s.Store, rel)
+		wrote, err := SubmitPathChanged(ctx, s.Root, s.ProposalDir, s.Folder, s.DeviceID, s.Store, rel)
+		if err != nil {
+			return err
+		}
+		if wrote && s.Controller != nil && s.ProposalFolder != "" {
+			_ = s.Controller.Rescan(ctx, s.ProposalFolder, nil)
+		}
+		return nil
 	})
 }
 
 func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string, store BaseStore, rel string) error {
+	_, err := SubmitPathChanged(ctx, root, proposalDir, folder, deviceID, store, rel)
+	return err
+}
+
+func SubmitPathChanged(ctx context.Context, root, proposalDir, folder, deviceID string, store BaseStore, rel string) (bool, error) {
 	path, err := safeJoin(root, rel)
 	if err != nil {
-		return err
+		return false, err
 	}
 	bs, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return false, nil
 	}
 	base, ok, err := store.Base(ctx, folder, rel)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if ok && hashString(base) == hashBytes(bs) {
-		return nil
+		return false, nil
 	}
 	content := string(bs)
-	return SubmitContent(ctx, proposalDir, folder, deviceID, store, rel, content, false)
+	return SubmitContentChanged(ctx, proposalDir, folder, deviceID, store, rel, content, false)
 }
 
 func SubmitContent(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel, content string, force bool) error {
+	_, err := SubmitContentChanged(ctx, proposalDir, folder, deviceID, store, rel, content, force)
+	return err
+}
+
+func SubmitContentChanged(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel, content string, force bool) (bool, error) {
 	base, ok, err := store.Base(ctx, folder, rel)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if ok && hashString(base) == hashString(content) && !force {
-		return nil
+		return false, nil
 	}
 	baseHash := ""
 	if ok {
@@ -161,7 +179,7 @@ func SubmitContent(ctx context.Context, proposalDir, folder, deviceID string, st
 	} else {
 		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
 	}
-	return writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
+	return true, writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
 }
 
 func GlobalConflicts(proposalDir string) ([]Conflict, error) {

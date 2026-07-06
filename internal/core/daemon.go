@@ -272,13 +272,14 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		}()
 		go func() {
 			if err := (&proposal.Submitter{
-				Root:        appCfg.VaultPath,
-				ProposalDir: appCfg.ProposalPath,
-				Folder:      appconfig.DefaultFolderID,
-				DeviceID:    myID.String(),
-				Store:       store,
-				Controller:  controller,
-				Interval:    time.Second,
+				Root:           appCfg.VaultPath,
+				ProposalDir:    appCfg.ProposalPath,
+				ProposalFolder: appconfig.ProposalFolderID,
+				Folder:         appconfig.DefaultFolderID,
+				DeviceID:       myID.String(),
+				Store:          store,
+				Controller:     controller,
+				Interval:       time.Second,
 			}).Run(ctx); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, err)
 			}
