@@ -150,7 +150,7 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 	if err != nil {
 		return err
 	}
-	resolvedByHub := args.Action == "local" || args.Action == "submerge" || args.Action == "manual"
+	resolvedByHub := args.Action == "local" || args.Action == "remote" || args.Action == "submerge" || args.Action == "manual"
 	if resolvedByHub {
 		content, err := readOptional(s.root, path)
 		if err != nil {
