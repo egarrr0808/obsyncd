@@ -26,7 +26,10 @@ type Controller interface {
 type Store interface {
 	Base(ctx context.Context, folder, path string) (string, bool, error)
 	SaveBase(ctx context.Context, folder, path, content string) error
+	DeleteBase(ctx context.Context, folder, path string) error
+	TrackedPaths() ([]string, error)
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
+	StageRemoteDelete(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
 	ClearPending(ctx context.Context, folder, canonicalRel string) error
 	Pending(ctx context.Context) ([]statestore.Pending, error)
@@ -45,6 +48,7 @@ type Proposal struct {
 	ContentHash string `json:"content_hash"`
 	Content     string `json:"content"`
 	Resolve     bool   `json:"resolve,omitempty"`
+	Delete      bool   `json:"delete,omitempty"`
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -57,6 +61,8 @@ type Conflict struct {
 	ProposalHash  string `json:"proposal_hash"`
 	ServerContent string `json:"server_content"`
 	ClientContent string `json:"client_content"`
+	ServerDelete  bool   `json:"server_delete,omitempty"`
+	ClientDelete  bool   `json:"client_delete,omitempty"`
 	CreatedAt     string `json:"created_at"`
 }
 
@@ -67,6 +73,7 @@ type Accepted struct {
 	Path         string `json:"path"`
 	ContentHash  string `json:"content_hash"`
 	Content      string `json:"content"`
+	Delete       bool   `json:"delete,omitempty"`
 	CreatedAt    string `json:"created_at"`
 }
 
@@ -104,17 +111,41 @@ type ConflictIngest struct {
 	Interval       time.Duration
 }
 
-const proposalSettleDelay = 3 * time.Second
+var SettleDelay = 3 * time.Second
 
 func (s *Submitter) Run(ctx context.Context) error {
 	if s.Store == nil {
 		return errors.New("proposal submitter store is nil")
 	}
-	return every(ctx, s.Interval, s.scan)
+	return every(ctx, s.Interval, s.Scan)
 }
 
-func (s *Submitter) scan(ctx context.Context) error {
+func (s *Submitter) Scan(ctx context.Context) error {
 	cleanupTransportFiles(s.ProposalDir)
+
+	tracked, err := s.Store.TrackedPaths()
+	if err == nil {
+		for _, rel := range tracked {
+			fullPath, err := safeJoin(s.Root, rel)
+			if err != nil {
+				continue
+			}
+			_, statErr := os.Stat(fullPath)
+			if os.IsNotExist(statErr) {
+				if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
+					continue
+				}
+				exists, err := s.hasProposalForPath(rel)
+				if err != nil || exists {
+					continue
+				}
+				if err := s.SubmitDelete(ctx, rel); err != nil {
+					log.Printf("obsyncd submit delete failed for %s: %v", rel, err)
+				}
+			}
+		}
+	}
+
 	return walkMarkdown(s.Root, func(rel, path string) error {
 		if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
 			return err
@@ -128,6 +159,43 @@ func (s *Submitter) scan(ctx context.Context) error {
 		}
 		return nil
 	})
+}
+
+func (s *Submitter) hasProposalForPath(rel string) (bool, error) {
+	paths, err := LocalPending(s.ProposalDir, s.DeviceID)
+	if err != nil {
+		return false, err
+	}
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	for _, p := range paths {
+		if filepath.ToSlash(filepath.Clean(p)) == clean {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Submitter) SubmitDelete(ctx context.Context, rel string) error {
+	base, ok, err := s.Store.Base(ctx, s.Folder, rel)
+	if err != nil {
+		return err
+	}
+	baseHash := ""
+	if ok {
+		baseHash = hashString(base)
+	}
+	p := Proposal{
+		Type: "proposal", Device: s.DeviceID, Path: filepath.ToSlash(rel),
+		BaseHash: baseHash, ContentHash: "", Content: "",
+		Delete:    true,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00delete")
+	wrote := writeJSON(filepath.Join(s.ProposalDir, "proposal-"+p.ID+".json"), p)
+	if wrote == nil && s.Controller != nil && s.ProposalFolder != "" {
+		_ = s.Controller.Rescan(ctx, s.ProposalFolder, nil)
+	}
+	return wrote
 }
 
 func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string, store BaseStore, rel string) error {
@@ -158,6 +226,38 @@ func SubmitPathChanged(ctx context.Context, root, proposalDir, folder, deviceID 
 func SubmitContent(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel, content string, force bool) error {
 	_, err := SubmitContentChanged(ctx, proposalDir, folder, deviceID, store, rel, content, force)
 	return err
+}
+
+func SubmitDelete(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel string) error {
+	return SubmitDeleteChanged(ctx, proposalDir, folder, deviceID, store, rel, false)
+}
+
+func SubmitDeleteResolved(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel string) error {
+	return SubmitDeleteChanged(ctx, proposalDir, folder, deviceID, store, rel, true)
+}
+
+func SubmitDeleteChanged(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel string, force bool) error {
+	base, ok, err := store.Base(ctx, folder, rel)
+	if err != nil {
+		return err
+	}
+	baseHash := ""
+	if ok {
+		baseHash = hashString(base)
+	}
+	p := Proposal{
+		Type: "proposal", Device: deviceID, Path: filepath.ToSlash(rel),
+		BaseHash: baseHash, ContentHash: "", Content: "",
+		Delete:    true,
+		Resolve:   force,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if force {
+		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00delete\x00" + p.CreatedAt)
+	} else {
+		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00delete")
+	}
+	return writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
 }
 
 func SubmitContentChanged(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel, content string, force bool) (bool, error) {
@@ -260,10 +360,10 @@ func (h Hub) Run(ctx context.Context) error {
 	if h.Store == nil {
 		return errors.New("proposal hub store is nil")
 	}
-	return every(ctx, h.Interval, h.scan)
+	return every(ctx, h.Interval, h.Scan)
 }
 
-func (h Hub) scan(ctx context.Context) error {
+func (h Hub) Scan(ctx context.Context) error {
 	cleanupTransportFiles(h.ProposalDir)
 	entries, err := os.ReadDir(h.ProposalDir)
 	if os.IsNotExist(err) {
@@ -309,13 +409,20 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		serverHash = hashBytes(server)
 	}
 	if p.Resolve {
-		if serverHash != p.ContentHash {
-			if err := atomicWrite(canonical, []byte(p.Content), 0o644); err != nil {
+		if p.Delete {
+			_ = os.Remove(canonical)
+			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
 				return err
 			}
-		}
-		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
-			return err
+		} else {
+			if serverHash != p.ContentHash {
+				if err := atomicWrite(canonical, []byte(p.Content), 0o644); err != nil {
+					return err
+				}
+			}
+			if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
+				return err
+			}
 		}
 		created := time.Now().UTC().Format(time.RFC3339Nano)
 		if err := h.writeAccepted(ctx, p, p.Content, p.ContentHash, created); err != nil {
@@ -330,6 +437,65 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		log.Printf("OBSYNCD HUB: resolved %s from %s", p.Path, short(p.Device))
 		return nil
 	}
+
+	if p.Delete {
+		pathHasConflict := h.hasConflictForPath(p.Path)
+		if !p.Resolve && serverMissing && !h.hasCompetingProposal(p) && !pathHasConflict {
+			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
+				return err
+			}
+			created := time.Now().UTC().Format(time.RFC3339Nano)
+			if err := h.writeAccepted(ctx, p, "", "", created); err != nil {
+				return err
+			}
+			_ = os.Remove(proposalPath)
+			if h.Controller != nil {
+				_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
+			}
+			h.removeConflicts(ctx, p.Path)
+			log.Printf("OBSYNCD HUB: confirmed delete %s from %s", p.Path, short(p.Device))
+			return nil
+		}
+		if !p.Resolve && serverHash == p.BaseHash && !serverMissing && (h.hasCompetingProposal(p) || pathHasConflict) {
+			return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
+		}
+		if serverMissing {
+			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
+				return err
+			}
+			created := time.Now().UTC().Format(time.RFC3339Nano)
+			if err := h.writeAccepted(ctx, p, "", "", created); err != nil {
+				return err
+			}
+			_ = os.Remove(proposalPath)
+			if h.Controller != nil {
+				_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
+			}
+			h.removeConflicts(ctx, p.Path)
+			log.Printf("OBSYNCD HUB: confirmed delete %s from %s", p.Path, short(p.Device))
+			return nil
+		}
+		if serverHash == p.BaseHash {
+			_ = os.Remove(canonical)
+			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
+				return err
+			}
+			created := time.Now().UTC().Format(time.RFC3339Nano)
+			if err := h.writeAccepted(ctx, p, "", "", created); err != nil {
+				return err
+			}
+			_ = os.Remove(proposalPath)
+			if h.Controller != nil {
+				_ = h.Controller.Rescan(ctx, h.Folder, []string{p.Path})
+				_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
+			}
+			h.removeConflicts(ctx, p.Path)
+			log.Printf("OBSYNCD HUB: accepted delete %s from %s", p.Path, short(p.Device))
+			return nil
+		}
+		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
+	}
+
 	pathHasConflict := h.hasConflictForPath(p.Path)
 	if serverMissing && p.BaseHash == "" && !h.hasCompetingProposal(p) {
 		pathHasConflict = false
@@ -382,9 +548,11 @@ func (h Hub) writeConflict(ctx context.Context, proposalPath string, p Proposal,
 		Type: "conflict", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
 		ServerHash: serverHash, ProposalHash: p.ContentHash,
 		ServerContent: serverContent, ClientContent: p.Content,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		ServerDelete: serverHash == "",
+		ClientDelete: p.Delete,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	if err := writeJSON(filepath.Join(h.ProposalDir, "conflict-"+p.ID+".json"), c); err != nil {
+	if err := writeJSON(filepath.Join(h.ProposalDir, "conflict-"+c.ID+".json"), c); err != nil {
 		return err
 	}
 	_ = os.Remove(proposalPath)
@@ -402,6 +570,7 @@ func (h Hub) writeAccepted(ctx context.Context, p Proposal, content, contentHash
 		ack := Accepted{
 			Type: "accepted", ID: p.ID, TargetDevice: target, Path: p.Path,
 			ContentHash: contentHash, Content: content,
+			Delete:    p.Delete,
 			CreatedAt: created,
 		}
 		name := "accepted-" + deviceKey(target) + "-" + p.ID + ".json"
@@ -437,7 +606,7 @@ func proposalSettled(p Proposal) bool {
 	if err != nil {
 		return true
 	}
-	return time.Since(created) >= proposalSettleDelay
+	return time.Since(created) >= SettleDelay
 }
 
 func (h Hub) hasCompetingProposal(p Proposal) bool {
@@ -485,10 +654,10 @@ func (c ConflictIngest) Run(ctx context.Context) error {
 	if c.Store == nil {
 		return errors.New("conflict ingest store is nil")
 	}
-	return every(ctx, c.Interval, c.scan)
+	return every(ctx, c.Interval, c.Scan)
 }
 
-func (c ConflictIngest) scan(ctx context.Context) error {
+func (c ConflictIngest) Scan(ctx context.Context) error {
 	cleanupTransportFiles(c.ProposalDir)
 	entries, err := os.ReadDir(c.ProposalDir)
 	if os.IsNotExist(err) {
@@ -527,18 +696,25 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
-	bs, err := os.ReadFile(canonical)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	if hashBytes(bs) != ack.ContentHash {
-		if err := atomicWrite(canonical, []byte(ack.Content), 0o644); err != nil {
+	if ack.Delete {
+		_ = os.Remove(canonical)
+		if err := c.Store.DeleteBase(ctx, c.Folder, ack.Path); err != nil {
 			return err
 		}
-		bs = []byte(ack.Content)
-	}
-	if err := c.Store.SaveBase(ctx, c.Folder, ack.Path, string(bs)); err != nil {
-		return err
+	} else {
+		bs, err := os.ReadFile(canonical)
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if hashBytes(bs) != ack.ContentHash {
+			if err := atomicWrite(canonical, []byte(ack.Content), 0o644); err != nil {
+				return err
+			}
+			bs = []byte(ack.Content)
+		}
+		if err := c.Store.SaveBase(ctx, c.Folder, ack.Path, string(bs)); err != nil {
+			return err
+		}
 	}
 	if err := c.Store.ClearPending(ctx, c.Folder, ack.Path); err != nil {
 		return err
@@ -574,14 +750,19 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	}
 	local, err := os.ReadFile(canonical)
 	if os.IsNotExist(err) {
-		if err := atomicWrite(canonical, []byte(job.ClientContent), 0o644); err != nil {
-			return err
+		if !job.ClientDelete {
+			if err := atomicWrite(canonical, []byte(job.ClientContent), 0o644); err != nil {
+				return err
+			}
+			local = []byte(job.ClientContent)
 		}
-		local = []byte(job.ClientContent)
 	} else if err != nil {
 		return err
 	}
-	if job.ProposalHash != "" && hashBytes(local) != job.ProposalHash {
+	if job.ClientDelete && len(local) > 0 {
+		return nil
+	}
+	if !job.ClientDelete && job.ProposalHash != "" && hashBytes(local) != job.ProposalHash {
 		return nil
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(canonical), ".obsyncd-server-*")
@@ -598,9 +779,15 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 		_ = os.Remove(tmpName)
 		return err
 	}
-	if _, err := c.Store.Stage(ctx, c.Folder, job.Path, tmpName); err != nil {
+	var stageErr error
+	if job.ServerDelete {
+		_, stageErr = c.Store.StageRemoteDelete(ctx, c.Folder, job.Path, tmpName)
+	} else {
+		_, stageErr = c.Store.Stage(ctx, c.Folder, job.Path, tmpName)
+	}
+	if stageErr != nil {
 		_ = os.Remove(tmpName)
-		return err
+		return stageErr
 	}
 	if err := c.Store.SaveBase(ctx, c.Folder, job.Path, job.ServerContent); err != nil {
 		return err
@@ -667,18 +854,23 @@ func cleanupTransportFiles(dir string) {
 	if err != nil {
 		return
 	}
-	cutoff := time.Now().Add(-10 * time.Minute)
+	now := time.Now()
+	cutoff10m := now.Add(-10 * time.Minute)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, ".syncthing") && !(strings.HasPrefix(name, "accepted-") && filepath.Ext(name) == ".json") {
+		isStale10m := strings.HasPrefix(name, ".syncthing") || (strings.HasPrefix(name, "accepted-") && filepath.Ext(name) == ".json")
+		if !isStale10m {
 			continue
 		}
 		path := filepath.Join(dir, name)
 		info, err := entry.Info()
-		if err != nil || info.ModTime().After(cutoff) {
+		if err != nil {
+			continue
+		}
+		if isStale10m && info.ModTime().After(cutoff10m) {
 			continue
 		}
 		_ = os.Remove(path)

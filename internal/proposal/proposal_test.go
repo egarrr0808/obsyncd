@@ -430,13 +430,16 @@ func TestLocalPendingListsOwnProposals(t *testing.T) {
 
 func TestCleanupTransportFilesRemovesOnlyStaleAcksAndTemps(t *testing.T) {
 	dir := t.TempDir()
-	stale := time.Now().Add(-time.Hour)
+	stale1h := time.Now().Add(-time.Hour)
+	stale30h := time.Now().Add(-30 * time.Hour)
 	files := []string{
 		"accepted-old.json",
 		".syncthing.tmp",
 		"proposal-keep.json",
 		"conflict-keep.json",
 		"accepted-new.json",
+		"proposal-old.json",
+		"conflict-old.json",
 	}
 	for _, name := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
@@ -444,7 +447,12 @@ func TestCleanupTransportFilesRemovesOnlyStaleAcksAndTemps(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"accepted-old.json", ".syncthing.tmp"} {
-		if err := os.Chtimes(filepath.Join(dir, name), stale, stale); err != nil {
+		if err := os.Chtimes(filepath.Join(dir, name), stale1h, stale1h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"proposal-old.json", "conflict-old.json"} {
+		if err := os.Chtimes(filepath.Join(dir, name), stale30h, stale30h); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -454,7 +462,7 @@ func TestCleanupTransportFilesRemovesOnlyStaleAcksAndTemps(t *testing.T) {
 			t.Fatalf("%s remains: %v", name, err)
 		}
 	}
-	for _, name := range []string{"proposal-keep.json", "conflict-keep.json", "accepted-new.json"} {
+	for _, name := range []string{"proposal-keep.json", "conflict-keep.json", "accepted-new.json", "proposal-old.json", "conflict-old.json"} {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Fatalf("%s removed: %v", name, err)
 		}

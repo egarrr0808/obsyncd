@@ -29,6 +29,7 @@ type Controller interface {
 type Stager interface {
 	Base(ctx context.Context, folder, path string) (string, bool, error)
 	SaveBase(ctx context.Context, folder, path, content string) error
+	DeleteBase(ctx context.Context, folder, path string) error
 	Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (statestore.Pending, error)
 	HasPending(ctx context.Context, folder, canonicalRel string) (bool, error)
 }
@@ -334,8 +335,12 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 		return err
 	}
 	remoteNow, err := os.ReadFile(path)
-	if err != nil {
+	remoteDeleted := os.IsNotExist(err)
+	if err != nil && !remoteDeleted {
 		return err
+	}
+	if remoteDeleted {
+		remoteNow = []byte("")
 	}
 	if string(localBefore) == string(remoteNow) {
 		return os.Remove(snapPath)
@@ -346,6 +351,10 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 			return err
 		} else if ok && base == string(localBefore) {
 			_ = os.Remove(snapPath)
+			if remoteDeleted {
+				_ = os.Remove(path)
+				return g.Stager.DeleteBase(ctx, g.Folder, rel)
+			}
 			return g.Stager.SaveBase(ctx, g.Folder, rel, string(remoteNow))
 		} else if ok && base == string(remoteNow) {
 			return os.Remove(snapPath)
@@ -592,4 +601,12 @@ func atomicWrite(path string, data []byte, perm fs.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+func (g *Guard) DetectRemoteOverwrite(ctx context.Context, rel string) error {
+	return g.detectRemoteOverwrite(ctx, rel)
+}
+
+func (g *Guard) SnapshotPath(rel string) string {
+	return g.snapshotPath(rel)
 }

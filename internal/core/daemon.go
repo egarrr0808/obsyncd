@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +113,10 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	}
 	if err := os.MkdirAll(paths.StateDir, 0o700); err != nil {
 		return nil, err
+	}
+	logFile, err := os.OpenFile(filepath.Join(paths.StateDir, "obsyncd.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stderr, logFile))
 	}
 	appCfg.ProposalPath = filepath.Join(paths.StateDir, "proposals")
 	if err := os.MkdirAll(appCfg.ProposalPath, 0o700); err != nil {
@@ -300,7 +306,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 	if role == "hub" {
 		ipcStore = nil
 	}
-	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, appCfg.ProposalPath, myID.String(), ipcStore, oracleID, oracleName)
+	rpcServer, err := ipc.Start(ctx, "", app, stCfg, appconfig.DefaultFolderID, appCfg.VaultPath, appCfg.ProposalPath, myID.String(), ipcStore, oracleID, oracleName, role)
 	if err != nil {
 		app.Stop(svcutil.ExitError)
 		cfgCancel()

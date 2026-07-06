@@ -13,6 +13,9 @@ type StatusReply struct {
 	Pending         []PendingConflict
 	LocalPending    []string
 	GlobalConflicts []GlobalConflict
+	DeviceID        string
+	VaultPath       string
+	Role            string
 }
 
 type PendingConflict struct {
@@ -25,6 +28,8 @@ type GlobalConflict struct {
 	TargetDevice  string
 	ServerContent string
 	ClientContent string
+	ServerDelete  bool
+	ClientDelete  bool
 }
 
 type RescanArgs struct {

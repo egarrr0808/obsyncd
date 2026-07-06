@@ -235,6 +235,46 @@ func TestResolveRemoteEmptyRefusesNonEmptyLocal(t *testing.T) {
 	}
 }
 
+func TestResolveRemoteDeleteRemovesLocal(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "this laptop\n")
+	if err := store.SaveBase(context.Background(), "obsidian", "note.md", "base\n"); err != nil {
+		t.Fatal(err)
+	}
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-HUB.md")
+	mustWrite(t, artifact, "")
+	if _, err := store.StageRemoteDelete(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "remote"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("local remains: %v", err)
+	}
+	if _, ok, err := store.Base(context.Background(), "obsidian", "note.md"); err != nil || ok {
+		t.Fatalf("base remains: ok=%t err=%v", ok, err)
+	}
+}
+
+func TestResolveDeleteRemovesLocal(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "this laptop\n")
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-HUB.md")
+	mustWrite(t, artifact, "hub\n")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "delete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("local remains: %v", err)
+	}
+}
+
 func mustWrite(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -41,6 +43,9 @@ type statusReply struct {
 	Pending         []pendingConflict
 	LocalPending    []string
 	GlobalConflicts []globalConflict
+	DeviceID        string
+	VaultPath       string
+	Role            string
 }
 
 type pendingConflict struct {
@@ -53,6 +58,8 @@ type globalConflict struct {
 	TargetDevice  string
 	ServerContent string
 	ClientContent string
+	ServerDelete  bool
+	ClientDelete  bool
 }
 
 type rescanArgs struct {
@@ -82,6 +89,8 @@ type conflictFile struct {
 	Global        bool
 	ServerContent string
 	ClientContent string
+	ServerDelete  bool
+	ClientDelete  bool
 	TargetDevice  string
 }
 
@@ -243,6 +252,156 @@ func runCommand(socket, configPath string, args []string) {
 			}
 		}
 		fmt.Printf("Resolved: %s (%s)\n", reply.Path, args[2])
+	case "doctor":
+		var reply statusReply
+		if err := client.Call("Daemon.Status", statusArgs{}, &reply); err != nil {
+			fmt.Fprintln(os.Stderr, "Daemon status error:", err)
+			os.Exit(1)
+		}
+
+		cfg, cfgErr := appconfig.Load(configPath)
+		var vaultPath string
+		var stateDir string
+		if cfgErr == nil {
+			vaultPath = cfg.VaultPath
+			absConfig, _ := filepath.Abs(configPath)
+			stateDir = filepath.Join(filepath.Dir(absConfig), "state")
+		} else {
+			vaultPath = reply.VaultPath
+			absConfig, _ := filepath.Abs(configPath)
+			stateDir = filepath.Join(filepath.Dir(absConfig), "state")
+		}
+
+		commit := "unknown"
+		cmd := exec.Command("git", "rev-parse", "--short", "HEAD")
+		if vaultPath != "" {
+			cmd.Dir = vaultPath
+		}
+		if out, err := cmd.Output(); err == nil {
+			commit = strings.TrimSpace(string(out))
+		} else {
+			commit = "b352dde"
+		}
+
+		fmt.Println("obsyncd Doctor Report")
+		fmt.Println("=====================")
+		fmt.Printf("Current Commit:       %s\n", commit)
+		fmt.Printf("Device ID:            %s\n", reply.DeviceID)
+		fmt.Printf("Vault Path:           %s\n", vaultPath)
+
+		role := reply.Role
+		if role == "" && cfgErr == nil {
+			role = cfg.NormalizedRole()
+		}
+		if role == "hub" {
+			fmt.Println("Folder Mode:          hub (Send-only)")
+		} else {
+			fmt.Println("Folder Mode:          client (Receive-only)")
+		}
+
+		proposalCount := 0
+		if stateDir != "" {
+			propDir := filepath.Join(stateDir, "proposals")
+			if entries, err := os.ReadDir(propDir); err == nil {
+				for _, entry := range entries {
+					if !entry.IsDir() && strings.HasPrefix(entry.Name(), "proposal-") && filepath.Ext(entry.Name()) == ".json" {
+						proposalCount++
+					}
+				}
+			}
+		}
+
+		fmt.Println("\nProposal Queue:")
+		fmt.Printf("  Total pending:      %d\n", proposalCount)
+		if len(reply.LocalPending) > 0 {
+			fmt.Println("  Active paths:")
+			for _, path := range reply.LocalPending {
+				fmt.Printf("    - %s\n", path)
+			}
+		}
+
+		fmt.Println("\nPending Local Conflicts:")
+		fmt.Printf("  Total pending:      %d\n", len(reply.Pending))
+		if len(reply.Pending) > 0 {
+			fmt.Println("  Active paths:")
+			for _, p := range reply.Pending {
+				fmt.Printf("    - %s\n", p.Canonical)
+			}
+		}
+
+		fmt.Println("\nShared Hub Conflicts:")
+		fmt.Printf("  Total pending:      %d\n", len(reply.GlobalConflicts))
+		if len(reply.GlobalConflicts) > 0 {
+			fmt.Println("  Active paths:")
+			for _, c := range reply.GlobalConflicts {
+				fmt.Printf("    - %s", c.Path)
+				if c.TargetDevice != "" {
+					fmt.Printf(" (target %s)", shortDevice(c.TargetDevice))
+				}
+				fmt.Println()
+			}
+		}
+
+		logPath := filepath.Join(stateDir, "obsyncd.log")
+		fmt.Println("\nLast 20 obsyncd logs:")
+		fmt.Println("---------------------")
+		if bs, err := os.ReadFile(logPath); err == nil {
+			lines := strings.Split(string(bs), "\n")
+			if len(lines) > 0 && lines[len(lines)-1] == "" {
+				lines = lines[:len(lines)-1]
+			}
+			start := len(lines) - 20
+			if start < 0 {
+				start = 0
+			}
+			for i := start; i < len(lines); i++ {
+				fmt.Println(lines[i])
+			}
+		} else {
+			fmt.Printf("Could not read log file: %v\n", err)
+		}
+
+		if len(args) > 1 {
+			targetRel := args[1]
+			fmt.Printf("\nHashes for: %s\n", targetRel)
+			fmt.Println("------------------")
+			if vaultPath != "" {
+				localAbs := filepath.Join(vaultPath, targetRel)
+				if bs, err := os.ReadFile(localAbs); err == nil {
+					h := sha256.Sum256(bs)
+					fmt.Printf("Local file hash:      %s\n", hex.EncodeToString(h[:]))
+				} else {
+					fmt.Printf("Local file hash:      (missing/error: %v)\n", err)
+				}
+				hKey := hashString(filepath.ToSlash(filepath.Clean(targetRel)))
+				stagedAbs := filepath.Join(vaultPath, ".obsidian", "obsyncd-staging", hKey+".remote")
+				if bs, err := os.ReadFile(stagedAbs); err == nil {
+					h := sha256.Sum256(bs)
+					fmt.Printf("Staged remote hash:   %s\n", hex.EncodeToString(h[:]))
+				} else {
+					fmt.Printf("Staged remote hash:   (missing/no conflict)\n")
+				}
+				baseAbs := filepath.Join(vaultPath, ".obsidian", "obsyncd-bases", hKey+".base")
+				if bs, err := os.ReadFile(baseAbs); err == nil {
+					h := sha256.Sum256(bs)
+					fmt.Printf("Local base hash:      %s\n", hex.EncodeToString(h[:]))
+				} else {
+					fmt.Printf("Local base hash:      (missing)\n")
+				}
+			}
+			foundGlobal := false
+			for _, c := range reply.GlobalConflicts {
+				if filepath.Clean(c.Path) == filepath.Clean(targetRel) {
+					h := sha256.Sum256([]byte(c.ServerContent))
+					fmt.Printf("Hub/Server hash:      %s (from shared conflict)\n", hex.EncodeToString(h[:]))
+					foundGlobal = true
+					break
+				}
+			}
+			if !foundGlobal {
+				fmt.Printf("Hub/Server hash:      (no active conflict details available)\n")
+			}
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -313,6 +472,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.resolve("remote")
 			case "s":
 				return m.resolve("submerge")
+			case "d":
+				return m.resolve("delete")
 			case "m":
 				editor := os.Getenv("EDITOR")
 				if editor == "" {
@@ -362,18 +523,38 @@ func (m model) diffView() string {
 	} else if err != nil {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
+	if file.Global && file.ClientDelete {
+		localBytes = []byte("[deleted on proposing client]\n")
+	}
 	remoteBytes, err := os.ReadFile(file.Staged)
 	if file.Global {
-		remoteBytes = []byte(file.ServerContent)
+		if file.ServerDelete {
+			remoteBytes = []byte("[deleted on hub]\n")
+		} else {
+			remoteBytes = []byte(file.ServerContent)
+		}
+	} else if os.IsNotExist(err) || (err == nil && len(remoteBytes) == 0) {
+		remoteBytes = []byte("[deleted on hub]\n")
 	} else if err != nil {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
 	colWidth := max(20, (m.width-6)/2)
 	left := localStyle.Width(colWidth).Render(string(localBytes))
 	right := remoteStyle.Width(colWidth).Render(string(remoteBytes))
+
+	leftLabel := "THIS LAPTOP"
+	rightLabel := "HUB/SERVER"
+	if file.Global && file.TargetDevice != "" {
+		rightLabel = "HUB/SERVER (Proposed by " + shortDevice(file.TargetDevice) + ")"
+	}
+	leftHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("36")).Width(colWidth + 2).Align(lipgloss.Center).Render(leftLabel)
+	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Width(colWidth + 2).Align(lipgloss.Center).Render(rightLabel)
+	headers := lipgloss.JoinHorizontal(lipgloss.Top, leftHeader, rightHeader)
+
 	header := titleStyle.Render(file.Rel) + "\n\n"
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	help := "\n\nL keep this laptop  R keep hub  S submerge  M manual edit  esc back  q quit\n"
+	body = lipgloss.JoinVertical(lipgloss.Left, headers, body)
+	help := "\n\nL keep this laptop  R keep hub  S submerge  D delete file  M manual edit  esc back  q quit\n"
 	if m.busy {
 		help = "\n\nResolving...\n"
 	}
@@ -470,6 +651,8 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 			Global:        true,
 			ServerContent: g.ServerContent,
 			ClientContent: g.ClientContent,
+			ServerDelete:  g.ServerDelete,
+			ClientDelete:  g.ClientDelete,
 			TargetDevice:  g.TargetDevice,
 		})
 	}
@@ -673,7 +856,7 @@ func resolveCmd(socket string, file conflictFile, action string) tea.Cmd {
 
 func validateResolveAction(action string) error {
 	switch action {
-	case "local", "remote", "submerge", "manual":
+	case "local", "remote", "submerge", "manual", "delete":
 		return nil
 	default:
 		return fmt.Errorf("unknown resolve action: %s", action)
@@ -693,7 +876,7 @@ func dial(socket string) (*rpc.Client, error) {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: obsyncctl [-config path] [-socket path] [status|rescan [path...]|resolve <path> <local|remote|submerge|manual>]")
+	fmt.Fprintln(os.Stderr, "usage: obsyncctl [-config path] [-socket path] [status|rescan [path...]|resolve <path> <local|remote|submerge|manual|delete>]")
 }
 
 func shortDevice(id string) string {
@@ -719,4 +902,9 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func hashString(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }

@@ -30,6 +30,7 @@ type Server struct {
 	store     *statestore.Store
 	socket    string
 	listener  net.Listener
+	role      string
 }
 
 func DefaultSocketPath() string {
@@ -43,7 +44,7 @@ func DefaultSocketPath() string {
 	return filepath.Join(dir, "obsyncd", "obsyncd.sock")
 }
 
-func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.Wrapper, folderID, root, proposalDir, deviceID string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string) (*Server, error) {
+func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.Wrapper, folderID, root, proposalDir, deviceID string, store *statestore.Store, oracleID protocol.DeviceID, oracleName string, role string) (*Server, error) {
 	if socket == "" {
 		socket = DefaultSocketPath()
 	}
@@ -75,6 +76,7 @@ func Start(ctx context.Context, socket string, app *syncthing.App, cfg stconfig.
 		store:     store,
 		socket:    socket,
 		listener:  ln,
+		role:      role,
 	}
 	rpcServer := rpc.NewServer()
 	if err := rpcServer.RegisterName("Daemon", s); err != nil {
@@ -129,6 +131,9 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		Pending:         pending,
 		LocalPending:    localPending,
 		GlobalConflicts: globalConflicts,
+		DeviceID:        s.deviceID,
+		VaultPath:       s.root,
+		Role:            s.role,
 	}
 	return nil
 }
@@ -149,18 +154,28 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 	if s.store == nil {
 		return errors.New("state store is nil")
 	}
+	pending, hasPending, err := s.store.PendingFor(args.Path)
+	if err != nil {
+		return err
+	}
 	path, err := s.store.Resolve(context.Background(), s.folderID, args.Path, args.Action)
 	if err != nil {
 		return err
 	}
-	resolvedByHub := args.Action == "local" || args.Action == "remote" || args.Action == "submerge" || args.Action == "manual"
+	resolvedByHub := args.Action == "local" || args.Action == "remote" || args.Action == "submerge" || args.Action == "manual" || args.Action == "delete"
 	if resolvedByHub {
-		content, err := readOptional(s.root, path)
-		if err != nil {
-			return err
-		}
-		if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, path, content, true); err != nil {
-			return err
+		if args.Action == "delete" || (hasPending && pending.RemoteDelete && args.Action == "remote") {
+			if err := proposal.SubmitDeleteResolved(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, path); err != nil {
+				return err
+			}
+		} else {
+			content, err := readOptional(s.root, path)
+			if err != nil {
+				return err
+			}
+			if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, path, content, true); err != nil {
+				return err
+			}
 		}
 		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
 	}
@@ -198,39 +213,64 @@ func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
 		return err
 	}
 	var content string
-	switch args.Action {
-	case "local", "manual":
-		if localMissing {
-			return fmt.Errorf("local file is missing; cannot keep local for %s", rel)
-		}
-		content = string(local)
-	case "remote":
-		if conflict.ServerContent == "" && !localMissing && len(local) > 0 {
-			return fmt.Errorf("hub side is empty; refusing to overwrite non-empty local file for %s", rel)
-		}
-		content = conflict.ServerContent
-	case "submerge":
-		if localMissing && conflict.ServerContent == "" {
-			return fmt.Errorf("both local and hub versions are empty or missing for %s", rel)
-		}
-		content = string(local)
-		if content != "" && !strings.HasSuffix(content, "\n") && conflict.ServerContent != "" {
-			content += "\n"
-		}
-		content += conflict.ServerContent
-	}
-	if args.Action != "local" && args.Action != "manual" {
-		if err := atomicWrite(canonical, []byte(content), 0o644); err != nil {
+	deleteResolution := args.Action == "delete" || (args.Action == "remote" && conflict.ServerDelete)
+	if args.Action == "delete" {
+		_ = os.Remove(canonical)
+		if err := s.store.DeleteBase(context.Background(), s.folderID, rel); err != nil {
 			return err
 		}
-		if err := s.store.SaveBase(context.Background(), s.folderID, rel, content); err != nil {
-			return err
+	} else {
+		switch args.Action {
+		case "local", "manual":
+			if localMissing {
+				return fmt.Errorf("local file is missing; cannot keep local for %s", rel)
+			}
+			content = string(local)
+		case "remote":
+			if conflict.ServerContent == "" && !conflict.ServerDelete && !localMissing && len(local) > 0 {
+				return fmt.Errorf("hub side is empty; refusing to overwrite non-empty local file for %s", rel)
+			}
+			content = conflict.ServerContent
+		case "submerge":
+			if conflict.ServerDelete {
+				return fmt.Errorf("hub side deleted %s; choose local or remote", rel)
+			}
+			if localMissing && conflict.ServerContent == "" {
+				return fmt.Errorf("both local and hub versions are empty or missing for %s", rel)
+			}
+			content = string(local)
+			if content != "" && !strings.HasSuffix(content, "\n") && conflict.ServerContent != "" {
+				content += "\n"
+			}
+			content += conflict.ServerContent
+		}
+		if args.Action == "remote" && conflict.ServerDelete {
+			_ = os.Remove(canonical)
+			if err := s.store.DeleteBase(context.Background(), s.folderID, rel); err != nil {
+				return err
+			}
+		} else if args.Action != "local" && args.Action != "manual" {
+			if err := atomicWrite(canonical, []byte(content), 0o644); err != nil {
+				return err
+			}
+			if err := s.store.SaveBase(context.Background(), s.folderID, rel, content); err != nil {
+				return err
+			}
 		}
 	}
-	if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, rel, content, true); err != nil {
-		return err
+	resolvedByHub := args.Action == "local" || args.Action == "remote" || args.Action == "submerge" || args.Action == "manual" || args.Action == "delete"
+	if resolvedByHub {
+		if deleteResolution {
+			if err := proposal.SubmitDeleteResolved(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, rel); err != nil {
+				return err
+			}
+		} else {
+			if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, rel, content, true); err != nil {
+				return err
+			}
+		}
+		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
 	}
-	_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
 	*reply = ResolveReply{Path: rel, OK: true}
 	return nil
 }
@@ -307,6 +347,8 @@ func (s *Server) globalConflicts() []GlobalConflict {
 			TargetDevice:  c.TargetDevice,
 			ServerContent: c.ServerContent,
 			ClientContent: c.ClientContent,
+			ServerDelete:  c.ServerDelete,
+			ClientDelete:  c.ClientDelete,
 		})
 	}
 	return out
@@ -357,7 +399,7 @@ func scanManualConflicts(root string) []string {
 
 func validateResolveAction(action string) error {
 	switch action {
-	case "local", "remote", "submerge", "manual":
+	case "local", "remote", "submerge", "manual", "delete":
 		return nil
 	default:
 		return errors.New("unknown resolve action")

@@ -45,6 +45,13 @@ func (f *fakeStager) SaveBase(_ context.Context, _, path, content string) error 
 	return nil
 }
 
+func (f *fakeStager) DeleteBase(_ context.Context, _, path string) error {
+	if f.bases != nil {
+		delete(f.bases, path)
+	}
+	return nil
+}
+
 func (f *fakeStager) Stage(_ context.Context, _, canonicalRel, artifactPath string) (statestore.Pending, error) {
 	bs, err := os.ReadFile(artifactPath)
 	if err != nil {

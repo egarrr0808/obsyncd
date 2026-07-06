@@ -14,8 +14,9 @@ import (
 )
 
 type Pending struct {
-	Canonical string
-	Staged    string
+	Canonical    string
+	Staged       string
+	RemoteDelete bool `json:"remote_delete,omitempty"`
 }
 
 type Store struct {
@@ -37,14 +38,93 @@ func (s *Store) Base(_ context.Context, _, path string) (string, bool, error) {
 	return string(bs), true, nil
 }
 
-func (s *Store) SaveBase(_ context.Context, _, path, content string) error {
+func (s *Store) SaveBase(ctx context.Context, _, path, content string) error {
 	if !isMarkdown(path) || isInternal(path) || strings.Contains(content, "%%OBSYNCD_CONFLICT_START%%") {
 		return nil
 	}
-	return atomicWrite(s.basePath(path), []byte(content), 0o600)
+	if err := atomicWrite(s.basePath(path), []byte(content), 0o600); err != nil {
+		return err
+	}
+	return s.addTrackedPath(path)
 }
 
-func (s *Store) Stage(_ context.Context, _, canonicalRel, artifactPath string) (Pending, error) {
+func (s *Store) DeleteBase(_ context.Context, _, path string) error {
+	_ = os.Remove(s.basePath(path))
+	return s.removeTrackedPath(path)
+}
+
+func (s *Store) trackedPath() string {
+	return filepath.Join(s.Root, ".obsidian", "obsyncd-bases", "tracked.json")
+}
+
+func (s *Store) TrackedPaths() ([]string, error) {
+	path := s.trackedPath()
+	bs, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var list []string
+	if err := json.Unmarshal(bs, &list); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
+func (s *Store) addTrackedPath(path string) error {
+	list, err := s.TrackedPaths()
+	if err != nil {
+		return err
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	for _, p := range list {
+		if p == clean {
+			return nil
+		}
+	}
+	list = append(list, clean)
+	bs, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(s.trackedPath(), append(bs, '\n'), 0o600)
+}
+
+func (s *Store) removeTrackedPath(path string) error {
+	list, err := s.TrackedPaths()
+	if err != nil {
+		return err
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	idx := -1
+	for i, p := range list {
+		if p == clean {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return nil
+	}
+	list = append(list[:idx], list[idx+1:]...)
+	bs, err := json.Marshal(list)
+	if err != nil {
+		return err
+	}
+	return atomicWrite(s.trackedPath(), append(bs, '\n'), 0o600)
+}
+
+func (s *Store) Stage(ctx context.Context, folder, canonicalRel, artifactPath string) (Pending, error) {
+	return s.stage(ctx, folder, canonicalRel, artifactPath, false)
+}
+
+func (s *Store) StageRemoteDelete(ctx context.Context, folder, canonicalRel, artifactPath string) (Pending, error) {
+	return s.stage(ctx, folder, canonicalRel, artifactPath, true)
+}
+
+func (s *Store) stage(_ context.Context, _, canonicalRel, artifactPath string, remoteDelete bool) (Pending, error) {
 	if err := validateRel(canonicalRel); err != nil {
 		return Pending{}, err
 	}
@@ -63,7 +143,7 @@ func (s *Store) Stage(_ context.Context, _, canonicalRel, artifactPath string) (
 	if err := os.Rename(artifactPath, stagedAbs); err != nil {
 		return Pending{}, err
 	}
-	p := Pending{Canonical: filepath.ToSlash(filepath.Clean(canonicalRel)), Staged: stagedRel}
+	p := Pending{Canonical: filepath.ToSlash(filepath.Clean(canonicalRel)), Staged: stagedRel, RemoteDelete: remoteDelete}
 	bs, err := json.Marshal(p)
 	if err != nil {
 		return Pending{}, err
@@ -72,6 +152,10 @@ func (s *Store) Stage(_ context.Context, _, canonicalRel, artifactPath string) (
 		return Pending{}, err
 	}
 	return p, nil
+}
+
+func (s *Store) PendingFor(canonicalRel string) (Pending, bool, error) {
+	return s.pending(canonicalRel)
 }
 
 func (s *Store) HasPending(_ context.Context, _, canonicalRel string) (bool, error) {
@@ -150,11 +234,14 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 		}
 		next = local
 	case "remote":
-		if len(remote) == 0 && !localMissing && len(local) > 0 {
+		if len(remote) == 0 && !p.RemoteDelete && !localMissing && len(local) > 0 {
 			return "", fmt.Errorf("remote side is empty; refusing to overwrite non-empty local file for %s", canonicalRel)
 		}
 		next = remote
 	case "submerge":
+		if p.RemoteDelete {
+			return "", fmt.Errorf("remote side deleted %s; choose local or remote", canonicalRel)
+		}
 		if localMissing && len(remote) == 0 {
 			return "", fmt.Errorf("both sides are empty or missing for %s", canonicalRel)
 		}
@@ -165,22 +252,40 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 		next = append(append([]byte(nil), local...), joiner(string(local), string(remote))...)
 		next = append(next, remote...)
 	case "manual":
+		if localMissing {
+			return "", fmt.Errorf("local file is missing; cannot manual keep %s", canonicalRel)
+		}
 		next = local
+	case "delete":
+		_ = os.Remove(canonicalPath)
+		if err := s.DeleteBase(ctx, folder, canonicalRel); err != nil {
+			return "", err
+		}
+		_ = os.Remove(stagedPath)
+		_ = os.Remove(s.pendingPath(canonicalRel))
+		return filepath.ToSlash(filepath.Clean(canonicalRel)), nil
 	default:
 		return "", fmt.Errorf("unknown resolution action: %s", action)
 	}
-	if action != "manual" {
-		if err := atomicWrite(canonicalPath, next, 0o644); err != nil {
+	if action == "remote" && p.RemoteDelete {
+		_ = os.Remove(canonicalPath)
+		if err := s.DeleteBase(ctx, folder, canonicalRel); err != nil {
 			return "", err
+		}
+	} else {
+		if action != "manual" {
+			if err := atomicWrite(canonicalPath, next, 0o644); err != nil {
+				return "", err
+			}
+		}
+		if action == "remote" {
+			if err := s.SaveBase(ctx, folder, canonicalRel, string(next)); err != nil {
+				return "", err
+			}
 		}
 	}
 	_ = os.Remove(stagedPath)
 	_ = os.Remove(s.pendingPath(canonicalRel))
-	if action == "remote" {
-		if err := s.SaveBase(ctx, folder, canonicalRel, string(next)); err != nil {
-			return "", err
-		}
-	}
 	return filepath.ToSlash(filepath.Clean(canonicalRel)), nil
 }
 
