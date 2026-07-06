@@ -110,6 +110,7 @@ func (s *Submitter) Run(ctx context.Context) error {
 }
 
 func (s *Submitter) scan(ctx context.Context) error {
+	cleanupTransportFiles(s.ProposalDir)
 	return walkMarkdown(s.Root, func(rel, path string) error {
 		if pending, err := s.Store.HasPending(ctx, s.Folder, rel); err != nil || pending {
 			return err
@@ -189,6 +190,7 @@ func (h Hub) Run(ctx context.Context) error {
 }
 
 func (h Hub) scan(ctx context.Context) error {
+	cleanupTransportFiles(h.ProposalDir)
 	entries, err := os.ReadDir(h.ProposalDir)
 	if os.IsNotExist(err) {
 		return nil
@@ -327,6 +329,7 @@ func (c ConflictIngest) Run(ctx context.Context) error {
 }
 
 func (c ConflictIngest) scan(ctx context.Context) error {
+	cleanupTransportFiles(c.ProposalDir)
 	entries, err := os.ReadDir(c.ProposalDir)
 	if os.IsNotExist(err) {
 		return nil
@@ -470,6 +473,29 @@ func (h Hub) removeConflicts(ctx context.Context, rel, device string) {
 	}
 	if len(removed) > 0 && h.Controller != nil {
 		_ = h.Controller.Rescan(ctx, h.ProposalFolder, removed)
+	}
+}
+
+func cleanupTransportFiles(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-10 * time.Minute)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, ".syncthing") && !(strings.HasPrefix(name, "accepted-") && filepath.Ext(name) == ".json") {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := entry.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		_ = os.Remove(path)
 	}
 }
 

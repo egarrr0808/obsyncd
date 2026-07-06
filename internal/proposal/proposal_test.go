@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"obsyncd/internal/statestore"
 )
@@ -299,6 +300,39 @@ func TestLocalPendingListsOwnProposals(t *testing.T) {
 	}
 	if len(paths) != 1 || paths[0] != "note.md" {
 		t.Fatalf("paths = %#v", paths)
+	}
+}
+
+func TestCleanupTransportFilesRemovesOnlyStaleAcksAndTemps(t *testing.T) {
+	dir := t.TempDir()
+	stale := time.Now().Add(-time.Hour)
+	files := []string{
+		"accepted-old.json",
+		".syncthing.tmp",
+		"proposal-keep.json",
+		"conflict-keep.json",
+		"accepted-new.json",
+	}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"accepted-old.json", ".syncthing.tmp"} {
+		if err := os.Chtimes(filepath.Join(dir, name), stale, stale); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cleanupTransportFiles(dir)
+	for _, name := range []string{"accepted-old.json", ".syncthing.tmp"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s remains: %v", name, err)
+		}
+	}
+	for _, name := range []string{"proposal-keep.json", "conflict-keep.json", "accepted-new.json"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Fatalf("%s removed: %v", name, err)
+		}
 	}
 }
 
