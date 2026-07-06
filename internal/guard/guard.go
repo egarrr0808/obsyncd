@@ -260,6 +260,7 @@ func (g *Guard) snapshotLocal(ctx context.Context, rel string) error {
 			if err != nil || matched {
 				return err
 			}
+			return g.Stager.SaveBase(ctx, g.Folder, rel, string(bs))
 		}
 	}
 	if err := atomicWrite(g.snapshotPath(rel), bs, 0o600); err != nil {
