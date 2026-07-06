@@ -42,3 +42,26 @@ func TestResolveContent(t *testing.T) {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
+
+func TestMergeGlobalFilesGroupsSamePath(t *testing.T) {
+	files := mergeGlobalFiles("/vault", []globalConflict{
+		{Path: "dir/../new start.md", TargetDevice: "client-one", ServerContent: "hub\n", ClientContent: "one\n"},
+		{Path: "new start.md", TargetDevice: "client-two", ServerContent: "hub\n", ClientContent: "two\n"},
+		{Path: "other.md", TargetDevice: "client-two", ServerContent: "hub\n", ClientContent: "other\n"},
+	})
+	if len(files) != 2 {
+		t.Fatalf("files = %#v", files)
+	}
+	if files[0].Rel != "new start.md" {
+		t.Fatalf("rel = %q", files[0].Rel)
+	}
+	if len(files[0].Versions) != 2 {
+		t.Fatalf("versions = %#v", files[0].Versions)
+	}
+	if files[0].Versions[0].Content != "one\n" || files[0].Versions[1].Content != "two\n" {
+		t.Fatalf("wrong versions = %#v", files[0].Versions)
+	}
+	if got := files[0].Label(); got != "new start.md [shared 2 client versions]" {
+		t.Fatalf("label = %q", got)
+	}
+}

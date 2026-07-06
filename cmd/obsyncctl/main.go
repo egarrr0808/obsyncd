@@ -92,6 +92,13 @@ type conflictFile struct {
 	ServerDelete  bool
 	ClientDelete  bool
 	TargetDevice  string
+	Versions      []conflictVersion
+}
+
+type conflictVersion struct {
+	Label   string
+	Content string
+	Delete  bool
 }
 
 type conflictBlock struct {
@@ -217,12 +224,15 @@ func runCommand(socket, configPath string, args []string) {
 		}
 		if len(reply.GlobalConflicts) > 0 {
 			fmt.Println("Shared Hub Conflicts:")
-			for _, conflict := range reply.GlobalConflicts {
-				fmt.Printf("  %s", conflict.Path)
-				if conflict.TargetDevice != "" {
-					fmt.Printf(" (target %s)", shortDevice(conflict.TargetDevice))
+			for _, group := range groupedGlobalConflicts(reply.GlobalConflicts) {
+				fmt.Printf("  %s", group.Path)
+				if len(group.Versions) > 0 {
+					fmt.Printf(" (%d client versions)", len(group.Versions))
 				}
 				fmt.Println()
+				for _, version := range group.Versions {
+					fmt.Printf("    %s\n", version.Label)
+				}
 			}
 		}
 	case "rescan":
@@ -333,12 +343,11 @@ func runCommand(socket, configPath string, args []string) {
 		fmt.Printf("  Total pending:      %d\n", len(reply.GlobalConflicts))
 		if len(reply.GlobalConflicts) > 0 {
 			fmt.Println("  Active paths:")
-			for _, c := range reply.GlobalConflicts {
-				fmt.Printf("    - %s", c.Path)
-				if c.TargetDevice != "" {
-					fmt.Printf(" (target %s)", shortDevice(c.TargetDevice))
+			for _, group := range groupedGlobalConflicts(reply.GlobalConflicts) {
+				fmt.Printf("    - %s (%d client versions)\n", group.Path, len(group.Versions))
+				for _, version := range group.Versions {
+					fmt.Printf("      %s\n", version.Label)
 				}
-				fmt.Println()
 			}
 		}
 
@@ -544,9 +553,6 @@ func (m model) diffView() string {
 
 	leftLabel := "THIS LAPTOP"
 	rightLabel := "HUB/SERVER"
-	if file.Global && file.TargetDevice != "" {
-		rightLabel = "HUB/SERVER (Proposed by " + shortDevice(file.TargetDevice) + ")"
-	}
 	leftHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("36")).Width(colWidth + 2).Align(lipgloss.Center).Render(leftLabel)
 	rightHeader := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214")).Width(colWidth + 2).Align(lipgloss.Center).Render(rightLabel)
 	headers := lipgloss.JoinHorizontal(lipgloss.Top, leftHeader, rightHeader)
@@ -554,6 +560,9 @@ func (m model) diffView() string {
 	header := titleStyle.Render(file.Rel) + "\n\n"
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	body = lipgloss.JoinVertical(lipgloss.Left, headers, body)
+	if file.Global && len(file.Versions) > 0 {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, "", renderGlobalVersions(file.Versions, m.width))
+	}
 	help := "\n\nL keep this laptop  R keep hub  S submerge  D delete file  M manual edit  esc back  q quit\n"
 	if m.busy {
 		help = "\n\nResolving...\n"
@@ -636,26 +645,19 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 	if err := client.Call("Daemon.Status", statusArgs{}, &reply); err != nil {
 		return nil, err
 	}
-	files := make([]conflictFile, 0, len(reply.Pending))
+	globalFiles := mergeGlobalFiles(root, reply.GlobalConflicts)
+	files := make([]conflictFile, 0, len(reply.Pending)+len(globalFiles))
 	for _, p := range reply.Pending {
+		if hasConflict(globalFiles, p.Canonical) {
+			continue
+		}
 		files = append(files, conflictFile{
 			Path:   filepath.Join(root, filepath.FromSlash(p.Canonical)),
 			Rel:    p.Canonical,
 			Staged: filepath.Join(root, filepath.FromSlash(p.Staged)),
 		})
 	}
-	for _, g := range reply.GlobalConflicts {
-		files = append(files, conflictFile{
-			Path:          filepath.Join(root, filepath.FromSlash(g.Path)),
-			Rel:           g.Path,
-			Global:        true,
-			ServerContent: g.ServerContent,
-			ClientContent: g.ClientContent,
-			ServerDelete:  g.ServerDelete,
-			ClientDelete:  g.ClientDelete,
-			TargetDevice:  g.TargetDevice,
-		})
-	}
+	files = append(files, globalFiles...)
 	if len(files) == 0 {
 		return scanPendingDir(root)
 	}
@@ -675,7 +677,77 @@ func (f conflictFile) Label() string {
 	if !f.Global || f.TargetDevice == "" {
 		return f.Rel
 	}
+	if len(f.Versions) > 1 {
+		return fmt.Sprintf("%s [shared %d client versions]", f.Rel, len(f.Versions))
+	}
 	return f.Rel + " [shared " + shortDevice(f.TargetDevice) + "]"
+}
+
+type globalConflictGroup struct {
+	Path     string
+	Versions []conflictVersion
+	First    globalConflict
+}
+
+func mergeGlobalFiles(root string, conflicts []globalConflict) []conflictFile {
+	groups := groupedGlobalConflicts(conflicts)
+	files := make([]conflictFile, 0, len(groups))
+	for _, group := range groups {
+		g := group.First
+		files = append(files, conflictFile{
+			Path:          filepath.Join(root, filepath.FromSlash(group.Path)),
+			Rel:           group.Path,
+			Global:        true,
+			ServerContent: g.ServerContent,
+			ClientContent: g.ClientContent,
+			ServerDelete:  g.ServerDelete,
+			ClientDelete:  g.ClientDelete,
+			TargetDevice:  g.TargetDevice,
+			Versions:      group.Versions,
+		})
+	}
+	return files
+}
+
+func groupedGlobalConflicts(conflicts []globalConflict) []globalConflictGroup {
+	byPath := map[string]int{}
+	var groups []globalConflictGroup
+	for _, c := range conflicts {
+		path := filepath.ToSlash(filepath.Clean(c.Path))
+		idx, ok := byPath[path]
+		if !ok {
+			idx = len(groups)
+			byPath[path] = idx
+			groups = append(groups, globalConflictGroup{Path: path, First: c})
+			groups[idx].First.Path = path
+		}
+		label := "client " + shortDevice(c.TargetDevice)
+		if c.TargetDevice == "" {
+			label = "client unknown"
+		}
+		groups[idx].Versions = append(groups[idx].Versions, conflictVersion{
+			Label:   label,
+			Content: c.ClientContent,
+			Delete:  c.ClientDelete,
+		})
+	}
+	return groups
+}
+
+func renderGlobalVersions(versions []conflictVersion, width int) string {
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("CLIENT VERSIONS") + "\n")
+	panelWidth := max(20, width-4)
+	for _, version := range versions {
+		content := version.Content
+		if version.Delete {
+			content = "[deleted on " + version.Label + "]\n"
+		}
+		header := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("141")).Render(strings.ToUpper(version.Label))
+		box := boxStyle.Width(panelWidth).Render(content)
+		b.WriteString(header + "\n" + box + "\n")
+	}
+	return b.String()
 }
 
 func scanPendingDir(root string) ([]conflictFile, error) {

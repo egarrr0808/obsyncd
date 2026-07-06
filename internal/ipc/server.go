@@ -177,7 +177,7 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 				return err
 			}
 		}
-		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
+		s.scanProposalsAsync()
 	}
 	if pending := s.pendingConflicts(); len(pending) == 0 && !resolvedByHub && len(s.localPending()) == 0 {
 		_ = s.setPaused(false)
@@ -238,11 +238,8 @@ func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
 			if localMissing && conflict.ServerContent == "" {
 				return fmt.Errorf("both local and hub versions are empty or missing for %s", rel)
 			}
-			content = string(local)
-			if content != "" && !strings.HasSuffix(content, "\n") && conflict.ServerContent != "" {
-				content += "\n"
-			}
-			content += conflict.ServerContent
+			versions := append([]string{string(local), conflict.ServerContent}, s.globalClientContents(rel)...)
+			content = joinUniqueVersions(versions...)
 		}
 		if args.Action == "remote" && conflict.ServerDelete {
 			_ = os.Remove(canonical)
@@ -269,10 +266,16 @@ func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
 				return err
 			}
 		}
-		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
+		s.scanProposalsAsync()
 	}
 	*reply = ResolveReply{Path: rel, OK: true}
 	return nil
+}
+
+func (s *Server) scanProposalsAsync() {
+	go func() {
+		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
+	}()
 }
 
 func (s *Server) setPaused(paused bool) error {
@@ -361,6 +364,32 @@ func (s *Server) globalConflict(rel string) (GlobalConflict, bool) {
 		}
 	}
 	return GlobalConflict{}, false
+}
+
+func (s *Server) globalClientContents(rel string) []string {
+	var out []string
+	for _, c := range s.globalConflicts() {
+		if c.Path == rel && !c.ClientDelete {
+			out = append(out, c.ClientContent)
+		}
+	}
+	return out
+}
+
+func joinUniqueVersions(contents ...string) string {
+	seen := map[string]struct{}{}
+	var parts []string
+	for _, content := range contents {
+		if content == "" {
+			continue
+		}
+		if _, ok := seen[content]; ok {
+			continue
+		}
+		seen[content] = struct{}{}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func pendingPaths(pending []PendingConflict) []string {
