@@ -421,6 +421,37 @@ func TestIntegrationScenario3And4And5(t *testing.T) {
 	}
 }
 
+func TestLatestUploaderSeesLaterSharedConflict(t *testing.T) {
+	cluster := NewCluster(t)
+
+	_ = os.WriteFile(filepath.Join(cluster.Laptop1.Root, "shared.md"), []byte("base"), 0o644)
+	cluster.Sync()
+
+	_ = os.WriteFile(filepath.Join(cluster.Laptop1.Root, "shared.md"), []byte("laptop-1 latest"), 0o644)
+	_ = os.WriteFile(cluster.Laptop1.Guard.SnapshotPath("shared.md"), []byte("base"), 0o600)
+	_ = os.WriteFile(filepath.Join(cluster.Laptop2.Root, "shared.md"), []byte("laptop-2 stale"), 0o644)
+	_ = os.WriteFile(cluster.Laptop2.Guard.SnapshotPath("shared.md"), []byte("base"), 0o600)
+
+	cluster.Sync()
+	cluster.SyncProposals()
+
+	for _, node := range []*TestNode{cluster.Laptop1, cluster.Laptop2} {
+		conflicts, err := proposal.GlobalConflicts(node.ProposalDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(conflicts) == 0 {
+			t.Fatalf("%s does not see shared conflict", node.ID)
+		}
+		if conflicts[0].Path != "shared.md" {
+			t.Fatalf("%s conflict path = %q", node.ID, conflicts[0].Path)
+		}
+		if conflicts[0].ServerContent != "laptop-1 latest" || conflicts[0].ClientContent != "laptop-2 stale" {
+			t.Fatalf("%s wrong conflict payload: %#v", node.ID, conflicts[0])
+		}
+	}
+}
+
 func TestIntegrationScenario6(t *testing.T) {
 	// Scenario 6: R publishes hub content
 	cluster := NewCluster(t)
