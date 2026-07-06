@@ -44,6 +44,7 @@ type Proposal struct {
 	BaseHash    string `json:"base_hash"`
 	ContentHash string `json:"content_hash"`
 	Content     string `json:"content"`
+	Resolve     bool   `json:"resolve,omitempty"`
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -102,6 +103,8 @@ type ConflictIngest struct {
 	Controller     Controller
 	Interval       time.Duration
 }
+
+const proposalSettleDelay = 3 * time.Second
 
 func (s *Submitter) Run(ctx context.Context) error {
 	if s.Store == nil {
@@ -172,6 +175,7 @@ func SubmitContentChanged(ctx context.Context, proposalDir, folder, deviceID str
 	p := Proposal{
 		Type: "proposal", Device: deviceID, Path: filepath.ToSlash(rel),
 		BaseHash: baseHash, ContentHash: hashString(content), Content: content,
+		Resolve:   force,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if force {
@@ -281,6 +285,9 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	if err := validateRel(p.Path); err != nil {
 		return err
 	}
+	if !p.Resolve && !proposalSettled(p) {
+		return nil
+	}
 	canonical, err := safeJoin(h.Root, p.Path)
 	if err != nil {
 		return err
@@ -293,6 +300,9 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	serverHash := ""
 	if !serverMissing {
 		serverHash = hashBytes(server)
+	}
+	if !p.Resolve && serverHash != p.ContentHash && serverHash == p.BaseHash && (h.hasCompetingProposal(p) || h.hasConflictForPath(p.Path)) {
+		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
 	}
 	if serverHash == p.ContentHash {
 		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
@@ -330,10 +340,14 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		log.Printf("OBSYNCD HUB: accepted %s from %s", p.Path, short(p.Device))
 		return nil
 	}
+	return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
+}
+
+func (h Hub) writeConflict(ctx context.Context, proposalPath string, p Proposal, serverHash, serverContent string) error {
 	c := Conflict{
 		Type: "conflict", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
 		ServerHash: serverHash, ProposalHash: p.ContentHash,
-		ServerContent: string(server), ClientContent: p.Content,
+		ServerContent: serverContent, ClientContent: p.Content,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err := writeJSON(filepath.Join(h.ProposalDir, "conflict-"+p.ID+".json"), c); err != nil {
@@ -382,6 +396,55 @@ func (h Hub) acceptTargets(proposer string) []string {
 		out = append(out, target)
 	}
 	return out
+}
+
+func proposalSettled(p Proposal) bool {
+	created, err := time.Parse(time.RFC3339Nano, p.CreatedAt)
+	if err != nil {
+		return true
+	}
+	return time.Since(created) >= proposalSettleDelay
+}
+
+func (h Hub) hasCompetingProposal(p Proposal) bool {
+	entries, err := os.ReadDir(h.ProposalDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "proposal-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(h.ProposalDir, entry.Name())
+		var other Proposal
+		if err := readJSON(path, &other); err != nil || other.Type != "proposal" || other.ID == p.ID || other.Resolve {
+			continue
+		}
+		if other.Path == p.Path && other.BaseHash == p.BaseHash && other.ContentHash != p.ContentHash {
+			return true
+		}
+	}
+	return false
+}
+
+func (h Hub) hasConflictForPath(rel string) bool {
+	entries, err := os.ReadDir(h.ProposalDir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var c Conflict
+		if err := readJSON(filepath.Join(h.ProposalDir, entry.Name()), &c); err != nil || c.Type != "conflict" {
+			continue
+		}
+		if c.Path == rel {
+			return true
+		}
+	}
+	return false
 }
 
 func (c ConflictIngest) Run(ctx context.Context) error {

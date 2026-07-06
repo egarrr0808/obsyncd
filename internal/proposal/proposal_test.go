@@ -93,6 +93,54 @@ func TestHubConflictsStaleProposal(t *testing.T) {
 	}
 }
 
+func TestHubConflictsSameBaseCompetingProposals(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: statestore.New(root), Controller: fakeController{},
+	}
+	first := Proposal{
+		Type: "proposal", ID: "first", Device: "client-a", Path: "note.md",
+		BaseHash: hashString("base\n"), ContentHash: hashString("one\n"), Content: "one\n",
+		CreatedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	second := Proposal{
+		Type: "proposal", ID: "second", Device: "client-b", Path: "note.md",
+		BaseHash: hashString("base\n"), ContentHash: hashString("two\n"), Content: "two\n",
+		CreatedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	firstPath := filepath.Join(proposals, "proposal-first.json")
+	secondPath := filepath.Join(proposals, "proposal-second.json")
+	if err := writeJSON(firstPath, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(secondPath, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), firstPath, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), secondPath, second); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "base\n" {
+		t.Fatalf("hub file changed: %q", got)
+	}
+	for _, name := range []string{"conflict-first.json", "conflict-second.json"} {
+		if _, err := os.Stat(filepath.Join(proposals, name)); err != nil {
+			t.Fatalf("%s missing: %v", name, err)
+		}
+	}
+}
+
 func TestHubConfirmsAlreadyMatchingProposal(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
@@ -431,6 +479,7 @@ func TestHubRemovesAcceptedConflict(t *testing.T) {
 	p := Proposal{
 		Type: "proposal", ID: "eight", Device: "client", Path: "note.md",
 		BaseHash: hashString("server\n"), ContentHash: hashString("resolved\n"), Content: "resolved\n",
+		Resolve: true,
 	}
 	pp := filepath.Join(proposals, "proposal-eight.json")
 	if err := writeJSON(pp, p); err != nil {
@@ -467,6 +516,7 @@ func TestHubRemovesAllConflictsForAcceptedPath(t *testing.T) {
 	p := Proposal{
 		Type: "proposal", ID: "accepted-path", Device: "client-a", Path: "note.md",
 		BaseHash: hashString("server\n"), ContentHash: hashString("resolved\n"), Content: "resolved\n",
+		Resolve: true,
 	}
 	pp := filepath.Join(proposals, "proposal-accepted-path.json")
 	if err := writeJSON(pp, p); err != nil {

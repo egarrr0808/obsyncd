@@ -152,7 +152,11 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 	}
 	resolvedByHub := args.Action == "local" || args.Action == "submerge" || args.Action == "manual"
 	if resolvedByHub {
-		if err := proposal.SubmitPath(context.Background(), s.root, s.proposals, s.folderID, s.deviceID, s.store, path); err != nil {
+		content, err := readOptional(s.root, path)
+		if err != nil {
+			return err
+		}
+		if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, path, content, true); err != nil {
 			return err
 		}
 		_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
@@ -405,4 +409,19 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+func readOptional(root, rel string) (string, error) {
+	path, err := safeJoin(root, rel)
+	if err != nil {
+		return "", err
+	}
+	bs, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return string(bs), nil
 }
