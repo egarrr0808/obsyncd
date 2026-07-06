@@ -44,6 +44,7 @@ type Guard struct {
 	Controller     Controller
 	Stager         Stager
 	MaxSnapshotAge time.Duration
+	BaseWait       time.Duration
 
 	mu sync.Mutex
 }
@@ -252,6 +253,11 @@ func (g *Guard) snapshotLocal(ctx context.Context, rel string) error {
 			return err
 		} else if ok && base == string(bs) {
 			return nil
+		} else if !ok {
+			matched, err := g.waitForArrivingBase(ctx, rel, string(bs))
+			if err != nil || matched {
+				return err
+			}
 		}
 	}
 	if err := atomicWrite(g.snapshotPath(rel), bs, 0o600); err != nil {
@@ -479,6 +485,33 @@ func (g *Guard) snapshotAge() time.Duration {
 		return g.MaxSnapshotAge
 	}
 	return 10 * time.Minute
+}
+
+func (g *Guard) waitForArrivingBase(ctx context.Context, rel, content string) (bool, error) {
+	wait := g.BaseWait
+	if wait <= 0 {
+		wait = 500 * time.Millisecond
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-deadline.C:
+			return false, nil
+		case <-tick.C:
+			base, ok, err := g.Stager.Base(ctx, g.Folder, rel)
+			if err != nil {
+				return false, err
+			}
+			if ok && base == content {
+				return true, nil
+			}
+		}
+	}
 }
 
 func copyPaths(path string) (string, string) {

@@ -11,9 +11,12 @@ import (
 	"obsyncd/internal/statestore"
 )
 
-type fakeController struct{ paths []string }
+type fakeController struct {
+	paths  []string
+	pauses int
+}
 
-func (f *fakeController) Pause(context.Context, string) error { return nil }
+func (f *fakeController) Pause(context.Context, string) error { f.pauses++; return nil }
 
 func (f *fakeController) Rescan(_ context.Context, _ string, paths []string) error {
 	f.paths = append(f.paths, paths...)
@@ -261,6 +264,34 @@ func TestSnapshotLocalSkipsCleanBase(t *testing.T) {
 	}
 	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
 		t.Fatalf("clean base created snapshot: %v", err)
+	}
+}
+
+func TestSnapshotLocalWaitsForArrivingBase(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctrl := &fakeController{}
+	stager := &fakeStager{}
+	g := &Guard{
+		Root: root, StateDir: state, Folder: "obsidian",
+		Controller: ctrl, Stager: stager, BaseWait: 200 * time.Millisecond,
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = stager.SaveBase(context.Background(), "obsidian", "note.md", "base\n")
+	}()
+	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if ctrl.pauses != 0 {
+		t.Fatalf("paused for arriving base")
+	}
+	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
+		t.Fatalf("arriving base created snapshot: %v", err)
 	}
 }
 
