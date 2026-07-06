@@ -344,6 +344,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 }
 
 func (h Hub) writeConflict(ctx context.Context, proposalPath string, p Proposal, serverHash, serverContent string) error {
+	h.removeTargetConflicts(ctx, p.Path, p.Device)
 	c := Conflict{
 		Type: "conflict", ID: p.ID, TargetDevice: p.Device, Path: p.Path,
 		ServerHash: serverHash, ProposalHash: p.ContentHash,
@@ -532,7 +533,6 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	if base, ok, err := c.Store.Base(ctx, c.Folder, job.Path); err != nil {
 		return err
 	} else if ok && job.ServerHash != "" && hashString(base) != job.ServerHash {
-		log.Printf("OBSYNCD CONFLICT: ignored superseded conflict for %s", job.Path)
 		return nil
 	}
 	canonical, err := safeJoin(c.Root, job.Path)
@@ -549,7 +549,6 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 		return err
 	}
 	if job.ProposalHash != "" && hashBytes(local) != job.ProposalHash {
-		log.Printf("OBSYNCD CONFLICT: ignored stale conflict for %s", job.Path)
 		return nil
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(canonical), ".obsyncd-server-*")
@@ -596,6 +595,31 @@ func (h Hub) removeConflicts(ctx context.Context, rel string) {
 			continue
 		}
 		if c.Path == rel {
+			_ = os.Remove(path)
+			removed = append(removed, entry.Name())
+		}
+	}
+	if len(removed) > 0 && h.Controller != nil {
+		_ = h.Controller.Rescan(ctx, h.ProposalFolder, removed)
+	}
+}
+
+func (h Hub) removeTargetConflicts(ctx context.Context, rel, device string) {
+	entries, err := os.ReadDir(h.ProposalDir)
+	if err != nil {
+		return
+	}
+	var removed []string
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(h.ProposalDir, entry.Name())
+		var c Conflict
+		if err := readJSON(path, &c); err != nil {
+			continue
+		}
+		if c.Path == rel && c.TargetDevice == device {
 			_ = os.Remove(path)
 			removed = append(removed, entry.Name())
 		}

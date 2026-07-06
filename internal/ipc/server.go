@@ -104,12 +104,14 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 	globalConflicts := s.globalConflicts()
 	manual := pendingPaths(pending)
 	paused := s.folderPaused()
-	if paused && len(pending) == 0 && len(localPending) == 0 {
+	if paused && len(pending) == 0 && len(localPending) == 0 && len(globalConflicts) == 0 {
 		_ = s.setPaused(false)
 		paused = false
 	}
 	if state == "" && len(pending) > 0 {
 		state = "paused (pending resolution)"
+	} else if state == "" && len(globalConflicts) > 0 {
+		state = "pending shared resolution"
 	} else if state == "" && len(localPending) > 0 {
 		state = "paused (awaiting hub approval)"
 	} else if state == "" && paused {
