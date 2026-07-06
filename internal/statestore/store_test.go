@@ -115,7 +115,7 @@ func TestClearPendingRemovesMetadataAndStagedFile(t *testing.T) {
 	}
 }
 
-func TestResolveDeletedCanonicalKeepLocalDeletion(t *testing.T) {
+func TestResolveDeletedCanonicalKeepLocalDeletionFails(t *testing.T) {
 	root := t.TempDir()
 	store := New(root)
 	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-REMOTE.md")
@@ -123,18 +123,8 @@ func TestResolveDeletedCanonicalKeepLocalDeletion(t *testing.T) {
 	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "local"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "note.md")); !os.IsNotExist(err) {
-		t.Fatalf("canonical exists or stat failed: %v", err)
-	}
-	pending, err := store.Pending(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pending) != 0 {
-		t.Fatalf("pending remains: %#v", pending)
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "local"); err == nil {
+		t.Fatal("expected missing local error")
 	}
 }
 
@@ -221,6 +211,27 @@ func TestResolveRemoteKeepsHubContent(t *testing.T) {
 	}
 	if string(got) != "hub\n" {
 		t.Fatalf("remote did not keep hub content: %q", got)
+	}
+}
+
+func TestResolveRemoteEmptyRefusesNonEmptyLocal(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	mustWrite(t, filepath.Join(root, "note.md"), "this laptop\n")
+	artifact := filepath.Join(root, "note.sync-conflict-20260704-120000-HUB.md")
+	mustWrite(t, artifact, "")
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", artifact); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Resolve(context.Background(), "obsidian", "note.md", "remote"); err == nil {
+		t.Fatal("expected empty remote refusal")
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "this laptop\n" {
+		t.Fatalf("local overwritten: %q", got)
 	}
 }
 

@@ -81,6 +81,7 @@ type conflictFile struct {
 	Staged        string
 	Global        bool
 	ServerContent string
+	ClientContent string
 	TargetDevice  string
 }
 
@@ -467,7 +468,8 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 			Path:          filepath.Join(root, filepath.FromSlash(g.Path)),
 			Rel:           g.Path,
 			Global:        true,
-			ServerContent: g.ClientContent,
+			ServerContent: g.ServerContent,
+			ClientContent: g.ClientContent,
 			TargetDevice:  g.TargetDevice,
 		})
 	}

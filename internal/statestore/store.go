@@ -145,10 +145,19 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 	var next []byte
 	switch action {
 	case "local":
+		if localMissing {
+			return "", fmt.Errorf("local file is missing; cannot keep local for %s", canonicalRel)
+		}
 		next = local
 	case "remote":
+		if len(remote) == 0 && !localMissing && len(local) > 0 {
+			return "", fmt.Errorf("remote side is empty; refusing to overwrite non-empty local file for %s", canonicalRel)
+		}
 		next = remote
 	case "submerge":
+		if localMissing && len(remote) == 0 {
+			return "", fmt.Errorf("both sides are empty or missing for %s", canonicalRel)
+		}
 		if localMissing {
 			next = remote
 			break
@@ -160,10 +169,7 @@ func (s *Store) Resolve(ctx context.Context, folder, canonicalRel, action string
 	default:
 		return "", fmt.Errorf("unknown resolution action: %s", action)
 	}
-	if action == "local" && localMissing {
-		_ = os.Remove(canonicalPath)
-		_ = os.Remove(s.basePath(canonicalRel))
-	} else if action != "manual" {
+	if action != "manual" {
 		if err := atomicWrite(canonicalPath, next, 0o644); err != nil {
 			return "", err
 		}

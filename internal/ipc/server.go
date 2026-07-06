@@ -3,6 +3,7 @@ package ipc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/rpc"
 	"os"
@@ -200,13 +201,18 @@ func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
 	switch args.Action {
 	case "local", "manual":
 		if localMissing {
-			content = ""
-		} else {
-			content = string(local)
+			return fmt.Errorf("local file is missing; cannot keep local for %s", rel)
 		}
+		content = string(local)
 	case "remote":
+		if conflict.ServerContent == "" && !localMissing && len(local) > 0 {
+			return fmt.Errorf("hub side is empty; refusing to overwrite non-empty local file for %s", rel)
+		}
 		content = conflict.ServerContent
 	case "submerge":
+		if localMissing && conflict.ServerContent == "" {
+			return fmt.Errorf("both local and hub versions are empty or missing for %s", rel)
+		}
 		content = string(local)
 		if content != "" && !strings.HasSuffix(content, "\n") && conflict.ServerContent != "" {
 			content += "\n"
