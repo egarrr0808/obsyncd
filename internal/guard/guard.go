@@ -196,6 +196,8 @@ func (g *Guard) stageChangedDirtyFile(ctx context.Context, rel string) error {
 	} else if ok && base == string(localBefore) {
 		_ = os.Remove(g.snapshotPath(rel))
 		return g.Stager.SaveBase(ctx, g.Folder, rel, string(remoteNow))
+	} else if ok && base == string(remoteNow) {
+		return os.Remove(g.snapshotPath(rel))
 	}
 	if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 		return err
@@ -344,6 +346,8 @@ func (g *Guard) detectRemoteOverwrite(ctx context.Context, rel string) error {
 		} else if ok && base == string(localBefore) {
 			_ = os.Remove(snapPath)
 			return g.Stager.SaveBase(ctx, g.Folder, rel, string(remoteNow))
+		} else if ok && base == string(remoteNow) {
+			return os.Remove(snapPath)
 		}
 		if pending, err := g.Stager.HasPending(ctx, g.Folder, rel); err != nil {
 			return err

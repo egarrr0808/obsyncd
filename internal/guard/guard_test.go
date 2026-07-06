@@ -250,6 +250,29 @@ func TestStageChangedDirtyFileAcceptsRemoteOverCleanBase(t *testing.T) {
 	}
 }
 
+func TestDetectRemoteOverwriteClearsAcceptedHubUpdate(t *testing.T) {
+	root := t.TempDir()
+	state := t.TempDir()
+	path := filepath.Join(root, "note.md")
+	if err := os.WriteFile(path, []byte("remote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stager := &fakeStager{bases: map[string]string{"note.md": "remote\n"}}
+	g := &Guard{Root: root, StateDir: state, Folder: "obsidian", Controller: &fakeController{}, Stager: stager}
+	if err := atomicWrite(g.snapshotPath("note.md"), []byte("local\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.detectRemoteOverwrite(context.Background(), "note.md"); err != nil {
+		t.Fatal(err)
+	}
+	if stager.canonical != "" {
+		t.Fatalf("staged accepted hub update: %s", stager.canonical)
+	}
+	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot remains: %v", err)
+	}
+}
+
 func TestSnapshotLocalSkipsCleanBase(t *testing.T) {
 	root := t.TempDir()
 	state := t.TempDir()
