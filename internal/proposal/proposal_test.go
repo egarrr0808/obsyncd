@@ -449,8 +449,8 @@ func TestConflictIngestIgnoresStaleConflict(t *testing.T) {
 	if err := ingest.handle(context.Background(), jp, job); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(jp); !os.IsNotExist(err) {
-		t.Fatalf("stale conflict remains: %v", err)
+	if _, err := os.Stat(jp); err != nil {
+		t.Fatalf("stale conflict removed locally: %v", err)
 	}
 	pending, err := store.Pending(context.Background())
 	if err != nil {
@@ -487,8 +487,8 @@ func TestConflictIngestIgnoresSupersededConflict(t *testing.T) {
 	if err := ingest.handle(context.Background(), jp, job); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(jp); !os.IsNotExist(err) {
-		t.Fatalf("superseded conflict remains: %v", err)
+	if _, err := os.Stat(jp); err != nil {
+		t.Fatalf("superseded conflict removed locally: %v", err)
 	}
 	pending, err := store.Pending(context.Background())
 	if err != nil {

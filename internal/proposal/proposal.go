@@ -532,10 +532,6 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	if base, ok, err := c.Store.Base(ctx, c.Folder, job.Path); err != nil {
 		return err
 	} else if ok && job.ServerHash != "" && hashString(base) != job.ServerHash {
-		_ = os.Remove(jobPath)
-		if c.Controller != nil {
-			_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(jobPath)})
-		}
 		log.Printf("OBSYNCD CONFLICT: ignored superseded conflict for %s", job.Path)
 		return nil
 	}
@@ -553,10 +549,6 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 		return err
 	}
 	if job.ProposalHash != "" && hashBytes(local) != job.ProposalHash {
-		_ = os.Remove(jobPath)
-		if c.Controller != nil {
-			_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(jobPath)})
-		}
 		log.Printf("OBSYNCD CONFLICT: ignored stale conflict for %s", job.Path)
 		return nil
 	}
@@ -581,10 +573,8 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	if err := c.Store.SaveBase(ctx, c.Folder, job.Path, job.ServerContent); err != nil {
 		return err
 	}
-	_ = os.Remove(jobPath)
 	if c.Controller != nil {
 		_ = c.Controller.Pause(ctx, c.Folder)
-		_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(jobPath)})
 	}
 	log.Printf("OBSYNCD CONFLICT: %s differs from hub; run obsyncctl", job.Path)
 	return nil
