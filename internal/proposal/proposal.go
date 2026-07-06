@@ -308,6 +308,28 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	if !serverMissing {
 		serverHash = hashBytes(server)
 	}
+	if p.Resolve {
+		if serverHash != p.ContentHash {
+			if err := atomicWrite(canonical, []byte(p.Content), 0o644); err != nil {
+				return err
+			}
+		}
+		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
+			return err
+		}
+		created := time.Now().UTC().Format(time.RFC3339Nano)
+		if err := h.writeAccepted(ctx, p, p.Content, p.ContentHash, created); err != nil {
+			return err
+		}
+		_ = os.Remove(proposalPath)
+		if h.Controller != nil {
+			_ = h.Controller.Rescan(ctx, h.Folder, []string{p.Path})
+			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
+		}
+		h.removeConflicts(ctx, p.Path)
+		log.Printf("OBSYNCD HUB: resolved %s from %s", p.Path, short(p.Device))
+		return nil
+	}
 	pathHasConflict := h.hasConflictForPath(p.Path)
 	if serverMissing && p.BaseHash == "" && !h.hasCompetingProposal(p) {
 		pathHasConflict = false

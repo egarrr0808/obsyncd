@@ -565,6 +565,43 @@ func TestHubRemovesAcceptedConflict(t *testing.T) {
 	}
 }
 
+func TestHubResolutionCreatesMissingFile(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := writeJSON(filepath.Join(proposals, "conflict-new.json"), Conflict{
+		Type: "conflict", ID: "new", TargetDevice: "client", Path: "new.md",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: store, Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "resolution", Device: "client", Path: "new.md",
+		BaseHash: "", ContentHash: hashString("created\n"), Content: "created\n",
+		Resolve: true,
+	}
+	pp := filepath.Join(proposals, "proposal-resolution.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "new.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "created\n" {
+		t.Fatalf("content = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-new.json")); !os.IsNotExist(err) {
+		t.Fatalf("conflict remains: %v", err)
+	}
+}
+
 func TestHubRemovesAllConflictsForAcceptedPath(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
