@@ -220,6 +220,49 @@ func TestAcceptedRemovesOriginalProposal(t *testing.T) {
 	}
 }
 
+func TestAcceptedAppliesResolutionToDivergentLocalFile(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pendingArtifact := filepath.Join(root, "server.tmp")
+	if err := os.WriteFile(pendingArtifact, []byte("server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", pendingArtifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "accepted-six.json"), Accepted{
+		Type: "accepted", ID: "six", TargetDevice: "client", Path: "note.md",
+		ContentHash: hashString("resolved\n"), Content: "resolved\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	if err := ingest.handleAccepted(context.Background(), filepath.Join(proposals, "accepted-six.json")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "resolved\n" {
+		t.Fatalf("content = %q", got)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending remains: %#v", pending)
+	}
+}
+
 func TestAcceptedDoesNotResumeWithOtherPendingConflict(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
@@ -398,5 +441,66 @@ func TestHubRemovesAcceptedConflict(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(proposals, "conflict-seven.json")); !os.IsNotExist(err) {
 		t.Fatalf("conflict remains: %v", err)
+	}
+}
+
+func TestHubRemovesAllConflictsForAcceptedPath(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, conflict := range []Conflict{
+		{Type: "conflict", ID: "a", TargetDevice: "client-a", Path: "note.md"},
+		{Type: "conflict", ID: "b", TargetDevice: "client-b", Path: "note.md"},
+		{Type: "conflict", ID: "other", TargetDevice: "client-b", Path: "other.md"},
+	} {
+		if err := writeJSON(filepath.Join(proposals, "conflict-"+conflict.ID+".json"), conflict); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: store, Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "accepted-path", Device: "client-a", Path: "note.md",
+		BaseHash: hashString("server\n"), ContentHash: hashString("resolved\n"), Content: "resolved\n",
+	}
+	pp := filepath.Join(proposals, "proposal-accepted-path.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"conflict-a.json", "conflict-b.json"} {
+		if _, err := os.Stat(filepath.Join(proposals, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s remains: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-other.json")); err != nil {
+		t.Fatalf("unrelated conflict removed: %v", err)
+	}
+}
+
+func TestGlobalConflictsListsSharedJobs(t *testing.T) {
+	proposals := t.TempDir()
+	for _, conflict := range []Conflict{
+		{Type: "conflict", ID: "one", TargetDevice: "client-a", Path: "dir/../note.md", ServerContent: "server\n"},
+		{Type: "conflict", ID: "two", TargetDevice: "client-a", Path: "note.md", ServerContent: "server\n"},
+		{Type: "conflict", ID: "three", TargetDevice: "client-b", Path: "note.md", ServerContent: "server\n"},
+	} {
+		if err := writeJSON(filepath.Join(proposals, "conflict-"+conflict.ID+".json"), conflict); err != nil {
+			t.Fatal(err)
+		}
+	}
+	conflicts, err := GlobalConflicts(proposals)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(conflicts) != 2 {
+		t.Fatalf("conflicts = %#v", conflicts)
 	}
 }

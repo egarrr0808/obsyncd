@@ -135,18 +135,63 @@ func SubmitPath(ctx context.Context, root, proposalDir, folder, deviceID string,
 	if ok && hashString(base) == hashBytes(bs) {
 		return nil
 	}
+	content := string(bs)
+	return SubmitContent(ctx, proposalDir, folder, deviceID, store, rel, content, false)
+}
+
+func SubmitContent(ctx context.Context, proposalDir, folder, deviceID string, store BaseStore, rel, content string, force bool) error {
+	base, ok, err := store.Base(ctx, folder, rel)
+	if err != nil {
+		return err
+	}
+	if ok && hashString(base) == hashString(content) && !force {
+		return nil
+	}
 	baseHash := ""
 	if ok {
 		baseHash = hashString(base)
 	}
-	content := string(bs)
 	p := Proposal{
 		Type: "proposal", Device: deviceID, Path: filepath.ToSlash(rel),
 		BaseHash: baseHash, ContentHash: hashString(content), Content: content,
 		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
+	if force {
+		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash + "\x00" + p.CreatedAt)
+	} else {
+		p.ID = hashString(p.Device + "\x00" + p.Path + "\x00" + p.BaseHash + "\x00" + p.ContentHash)
+	}
 	return writeJSON(filepath.Join(proposalDir, "proposal-"+p.ID+".json"), p)
+}
+
+func GlobalConflicts(proposalDir string) ([]Conflict, error) {
+	entries, err := os.ReadDir(proposalDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	var out []Conflict
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var c Conflict
+		if err := readJSON(filepath.Join(proposalDir, entry.Name()), &c); err != nil || c.Type != "conflict" {
+			continue
+		}
+		path := filepath.ToSlash(filepath.Clean(c.Path))
+		key := c.TargetDevice + "\x00" + path
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		c.Path = path
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 func LocalPending(proposalDir, deviceID string) ([]string, error) {
@@ -243,7 +288,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		if h.Controller != nil {
 			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
 		}
-		h.removeConflicts(ctx, p.Path, p.Device)
+		h.removeConflicts(ctx, p.Path)
 		log.Printf("OBSYNCD HUB: confirmed %s from %s", p.Path, short(p.Device))
 		return nil
 	}
@@ -263,7 +308,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 			_ = h.Controller.Rescan(ctx, h.Folder, []string{p.Path})
 			_ = h.Controller.Rescan(ctx, h.ProposalFolder, []string{filepath.Base(proposalPath)})
 		}
-		h.removeConflicts(ctx, p.Path, p.Device)
+		h.removeConflicts(ctx, p.Path)
 		log.Printf("OBSYNCD HUB: accepted %s from %s", p.Path, short(p.Device))
 		return nil
 	}
@@ -368,11 +413,14 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 		return err
 	}
 	bs, err := os.ReadFile(canonical)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	if hashBytes(bs) != ack.ContentHash {
-		return nil
+		if err := atomicWrite(canonical, []byte(ack.Content), 0o644); err != nil {
+			return err
+		}
+		bs = []byte(ack.Content)
 	}
 	if err := c.Store.SaveBase(ctx, c.Folder, ack.Path, string(bs)); err != nil {
 		return err
@@ -451,7 +499,7 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	return nil
 }
 
-func (h Hub) removeConflicts(ctx context.Context, rel, device string) {
+func (h Hub) removeConflicts(ctx context.Context, rel string) {
 	entries, err := os.ReadDir(h.ProposalDir)
 	if err != nil {
 		return
@@ -466,7 +514,7 @@ func (h Hub) removeConflicts(ctx context.Context, rel, device string) {
 		if err := readJSON(path, &c); err != nil {
 			continue
 		}
-		if c.Path == rel && c.TargetDevice == device {
+		if c.Path == rel {
 			_ = os.Remove(path)
 			removed = append(removed, entry.Name())
 		}

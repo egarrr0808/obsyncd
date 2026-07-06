@@ -12,11 +12,19 @@ type StatusReply struct {
 	ManualConflicts []string
 	Pending         []PendingConflict
 	LocalPending    []string
+	GlobalConflicts []GlobalConflict
 }
 
 type PendingConflict struct {
 	Canonical string
 	Staged    string
+}
+
+type GlobalConflict struct {
+	Path          string
+	TargetDevice  string
+	ServerContent string
+	ClientContent string
 }
 
 type RescanArgs struct {

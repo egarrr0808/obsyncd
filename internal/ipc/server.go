@@ -101,6 +101,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 	}
 	pending := s.pendingConflicts()
 	localPending := s.localPending()
+	globalConflicts := s.globalConflicts()
 	manual := pendingPaths(pending)
 	paused := s.folderPaused()
 	if paused && len(pending) == 0 && len(localPending) == 0 {
@@ -124,6 +125,7 @@ func (s *Server) Status(_ StatusArgs, reply *StatusReply) error {
 		ManualConflicts: manual,
 		Pending:         pending,
 		LocalPending:    localPending,
+		GlobalConflicts: globalConflicts,
 	}
 	return nil
 }
@@ -164,6 +166,60 @@ func (s *Server) Resolve(args ResolveArgs, reply *ResolveReply) error {
 		}
 	}
 	*reply = ResolveReply{Path: path, OK: true}
+	return nil
+}
+
+func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
+	if s.store == nil {
+		return errors.New("state store is nil")
+	}
+	if err := validateResolveAction(args.Action); err != nil {
+		return err
+	}
+	rel := filepath.ToSlash(filepath.Clean(args.Path))
+	conflict, ok := s.globalConflict(rel)
+	if !ok {
+		return errors.New("global conflict not found")
+	}
+	canonical, err := safeJoin(s.root, rel)
+	if err != nil {
+		return err
+	}
+	local, err := os.ReadFile(canonical)
+	localMissing := os.IsNotExist(err)
+	if err != nil && !localMissing {
+		return err
+	}
+	var content string
+	switch args.Action {
+	case "local", "manual":
+		if localMissing {
+			content = ""
+		} else {
+			content = string(local)
+		}
+	case "remote":
+		content = conflict.ServerContent
+	case "submerge":
+		content = string(local)
+		if content != "" && !strings.HasSuffix(content, "\n") && conflict.ServerContent != "" {
+			content += "\n"
+		}
+		content += conflict.ServerContent
+	}
+	if args.Action != "local" && args.Action != "manual" {
+		if err := atomicWrite(canonical, []byte(content), 0o644); err != nil {
+			return err
+		}
+		if err := s.store.SaveBase(context.Background(), s.folderID, rel, content); err != nil {
+			return err
+		}
+	}
+	if err := proposal.SubmitContent(context.Background(), s.proposals, s.folderID, s.deviceID, s.store, rel, content, true); err != nil {
+		return err
+	}
+	_ = s.app.Internals.ScanFolderSubdirs("obsyncd-proposals", nil)
+	*reply = ResolveReply{Path: rel, OK: true}
 	return nil
 }
 
@@ -227,6 +283,32 @@ func (s *Server) localPending() []string {
 	return paths
 }
 
+func (s *Server) globalConflicts() []GlobalConflict {
+	conflicts, err := proposal.GlobalConflicts(s.proposals)
+	if err != nil {
+		return nil
+	}
+	out := make([]GlobalConflict, 0, len(conflicts))
+	for _, c := range conflicts {
+		out = append(out, GlobalConflict{
+			Path:          c.Path,
+			TargetDevice:  c.TargetDevice,
+			ServerContent: c.ServerContent,
+			ClientContent: c.ClientContent,
+		})
+	}
+	return out
+}
+
+func (s *Server) globalConflict(rel string) (GlobalConflict, bool) {
+	for _, c := range s.globalConflicts() {
+		if c.Path == rel {
+			return c, true
+		}
+	}
+	return GlobalConflict{}, false
+}
+
 func pendingPaths(pending []PendingConflict) []string {
 	out := make([]string, 0, len(pending))
 	for _, p := range pending {
@@ -259,4 +341,68 @@ func scanManualConflicts(root string) []string {
 		return nil
 	})
 	return files
+}
+
+func validateResolveAction(action string) error {
+	switch action {
+	case "local", "remote", "submerge", "manual":
+		return nil
+	default:
+		return errors.New("unknown resolve action")
+	}
+}
+
+func safeJoin(root, rel string) (string, error) {
+	if root == "" {
+		return "", errors.New("root is empty")
+	}
+	clean := filepath.Clean(rel)
+	if clean == "." || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", errors.New("unsafe relative path")
+	}
+	full := filepath.Join(root, clean)
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	fullAbs, err := filepath.Abs(full)
+	if err != nil {
+		return "", err
+	}
+	relToRoot, err := filepath.Rel(rootAbs, fullAbs)
+	if err != nil {
+		return "", err
+	}
+	if relToRoot == ".." || strings.HasPrefix(relToRoot, ".."+string(filepath.Separator)) {
+		return "", errors.New("path escapes root")
+	}
+	return fullAbs, nil
+}
+
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".obsyncd-rpc-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

@@ -40,11 +40,19 @@ type statusReply struct {
 	ManualConflicts []string
 	Pending         []pendingConflict
 	LocalPending    []string
+	GlobalConflicts []globalConflict
 }
 
 type pendingConflict struct {
 	Canonical string
 	Staged    string
+}
+
+type globalConflict struct {
+	Path          string
+	TargetDevice  string
+	ServerContent string
+	ClientContent string
 }
 
 type rescanArgs struct {
@@ -68,9 +76,12 @@ type resolveReply struct {
 }
 
 type conflictFile struct {
-	Path   string
-	Rel    string
-	Staged string
+	Path          string
+	Rel           string
+	Staged        string
+	Global        bool
+	ServerContent string
+	TargetDevice  string
 }
 
 type conflictBlock struct {
@@ -99,6 +110,7 @@ type model struct {
 	height  int
 	message string
 	err     error
+	busy    bool
 }
 
 var (
@@ -193,6 +205,16 @@ func runCommand(socket, configPath string, args []string) {
 				fmt.Printf("  %s\n", path)
 			}
 		}
+		if len(reply.GlobalConflicts) > 0 {
+			fmt.Println("Shared Hub Conflicts:")
+			for _, conflict := range reply.GlobalConflicts {
+				fmt.Printf("  %s", conflict.Path)
+				if conflict.TargetDevice != "" {
+					fmt.Printf(" (target %s)", shortDevice(conflict.TargetDevice))
+				}
+				fmt.Println()
+			}
+		}
 	case "rescan":
 		var reply rescanReply
 		if err := callRescan(client, args[1:], &reply); err != nil {
@@ -214,8 +236,10 @@ func runCommand(socket, configPath string, args []string) {
 		}
 		var reply resolveReply
 		if err := client.Call("Daemon.Resolve", resolveArgs{Path: args[1], Action: args[2]}, &reply); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+			if err := client.Call("Daemon.ResolveGlobal", resolveArgs{Path: args[1], Action: args[2]}, &reply); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 		}
 		fmt.Printf("Resolved: %s (%s)\n", reply.Path, args[2])
 	default:
@@ -240,12 +264,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.mode = modeMessage
 			return m, nil
 		}
-		if err := resolvePending(m.socket, m.files[m.cursor].Rel, "manual"); err != nil {
-			m.err = err
+		file := m.files[m.cursor]
+		m.busy = true
+		return m, resolveCmd(m.socket, file, "manual")
+	case resolveDoneMsg:
+		m.busy = false
+		if msg.err != nil {
+			m.err = msg.err
 			m.mode = modeMessage
 			return m, nil
 		}
-		return m.reload("Manual edit saved."), nil
+		return m.reload("Resolved " + msg.path), nil
 	case tea.KeyMsg:
 		switch strings.ToLower(msg.String()) {
 		case "ctrl+c", "q":
@@ -273,13 +302,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.mode = modeDiff
 			}
 		case modeDiff:
+			if m.busy {
+				return m, nil
+			}
 			switch strings.ToLower(msg.String()) {
 			case "l":
-				return m.resolve("local"), nil
+				return m.resolve("local")
 			case "r":
-				return m.resolve("remote"), nil
+				return m.resolve("remote")
 			case "s":
-				return m.resolve("submerge"), nil
+				return m.resolve("submerge")
 			case "m":
 				editor := os.Getenv("EDITOR")
 				if editor == "" {
@@ -330,7 +362,9 @@ func (m model) diffView() string {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
 	remoteBytes, err := os.ReadFile(file.Staged)
-	if err != nil {
+	if file.Global {
+		remoteBytes = []byte(file.ServerContent)
+	} else if err != nil {
 		return errorStyle.Render(err.Error()) + "\n"
 	}
 	colWidth := max(20, (m.width-6)/2)
@@ -339,17 +373,16 @@ func (m model) diffView() string {
 	header := titleStyle.Render(file.Rel) + "\n\n"
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
 	help := "\n\nL keep this laptop  R keep hub  S submerge  M manual edit  esc back  q quit\n"
+	if m.busy {
+		help = "\n\nResolving...\n"
+	}
 	return header + body + help
 }
 
-func (m model) resolve(action string) model {
+func (m model) resolve(action string) (model, tea.Cmd) {
 	file := m.files[m.cursor]
-	if err := resolvePending(m.socket, file.Rel, action); err != nil {
-		m.err = err
-		m.mode = modeMessage
-		return m
-	}
-	return m.reload("Resolved " + file.Rel)
+	m.busy = true
+	return m, resolveCmd(m.socket, file, action)
 }
 
 func (m model) reload(message string) model {
@@ -374,6 +407,11 @@ func (m model) reload(message string) model {
 
 type editorDoneMsg struct {
 	err error
+}
+
+type resolveDoneMsg struct {
+	path string
+	err  error
 }
 
 func scanConflicts(root string) ([]conflictFile, error) {
@@ -424,10 +462,31 @@ func loadPending(socket, root string) ([]conflictFile, error) {
 			Staged: filepath.Join(root, filepath.FromSlash(p.Staged)),
 		})
 	}
+	for _, g := range reply.GlobalConflicts {
+		if hasConflict(files, g.Path) {
+			continue
+		}
+		files = append(files, conflictFile{
+			Path:          filepath.Join(root, filepath.FromSlash(g.Path)),
+			Rel:           g.Path,
+			Global:        true,
+			ServerContent: g.ServerContent,
+			TargetDevice:  g.TargetDevice,
+		})
+	}
 	if len(files) == 0 {
 		return scanPendingDir(root)
 	}
 	return files, nil
+}
+
+func hasConflict(files []conflictFile, rel string) bool {
+	for _, file := range files {
+		if file.Rel == rel {
+			return true
+		}
+	}
+	return false
 }
 
 func scanPendingDir(root string) ([]conflictFile, error) {
@@ -581,6 +640,31 @@ func resolvePending(socket, rel, action string) error {
 	return client.Call("Daemon.Resolve", resolveArgs{Path: rel, Action: action}, &reply)
 }
 
+func resolveGlobal(socket, rel, action string) error {
+	if err := validateResolveAction(action); err != nil {
+		return err
+	}
+	client, err := dial(socket)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	var reply resolveReply
+	return client.Call("Daemon.ResolveGlobal", resolveArgs{Path: rel, Action: action}, &reply)
+}
+
+func resolveCmd(socket string, file conflictFile, action string) tea.Cmd {
+	return func() tea.Msg {
+		var err error
+		if file.Global {
+			err = resolveGlobal(socket, file.Rel, action)
+		} else {
+			err = resolvePending(socket, file.Rel, action)
+		}
+		return resolveDoneMsg{path: file.Rel, err: err}
+	}
+}
+
 func validateResolveAction(action string) error {
 	switch action {
 	case "local", "remote", "submerge", "manual":
@@ -604,6 +688,13 @@ func dial(socket string) (*rpc.Client, error) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: obsyncctl [-config path] [-socket path] [status|rescan [path...]|resolve <path> <local|remote|submerge|manual>]")
+}
+
+func shortDevice(id string) string {
+	if len(id) <= 7 {
+		return id
+	}
+	return id[:7]
 }
 
 func defaultSocketPath() string {
