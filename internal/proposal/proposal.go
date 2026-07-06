@@ -308,7 +308,11 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	if !serverMissing {
 		serverHash = hashBytes(server)
 	}
-	if !p.Resolve && serverHash != p.ContentHash && serverHash == p.BaseHash && (h.hasCompetingProposal(p) || h.hasConflictForPath(p.Path)) {
+	pathHasConflict := h.hasConflictForPath(p.Path)
+	if serverMissing && p.BaseHash == "" && !h.hasCompetingProposal(p) {
+		pathHasConflict = false
+	}
+	if !p.Resolve && serverHash != p.ContentHash && serverHash == p.BaseHash && (h.hasCompetingProposal(p) || pathHasConflict) {
 		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
 	}
 	if serverHash == p.ContentHash {
