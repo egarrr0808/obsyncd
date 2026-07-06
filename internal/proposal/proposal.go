@@ -529,6 +529,16 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	if pending, err := c.Store.HasPending(ctx, c.Folder, job.Path); err != nil || pending {
 		return err
 	}
+	if base, ok, err := c.Store.Base(ctx, c.Folder, job.Path); err != nil {
+		return err
+	} else if ok && job.ServerHash != "" && hashString(base) != job.ServerHash {
+		_ = os.Remove(jobPath)
+		if c.Controller != nil {
+			_ = c.Controller.Rescan(ctx, c.ProposalFolder, []string{filepath.Base(jobPath)})
+		}
+		log.Printf("OBSYNCD CONFLICT: ignored superseded conflict for %s", job.Path)
+		return nil
+	}
 	canonical, err := safeJoin(c.Root, job.Path)
 	if err != nil {
 		return err

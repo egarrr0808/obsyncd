@@ -461,6 +461,44 @@ func TestConflictIngestIgnoresStaleConflict(t *testing.T) {
 	}
 }
 
+func TestConflictIngestIgnoresSupersededConflict(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("resolved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveBase(context.Background(), "obsidian", "note.md", "resolved\n"); err != nil {
+		t.Fatal(err)
+	}
+	job := Conflict{
+		Type: "conflict", ID: "superseded", TargetDevice: "client", Path: "note.md",
+		ServerHash: hashString("old-server\n"), ProposalHash: hashString("local\n"),
+		ServerContent: "old-server\n", ClientContent: "local\n",
+	}
+	jp := filepath.Join(proposals, "conflict-superseded.json")
+	if err := writeJSON(jp, job); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	if err := ingest.handle(context.Background(), jp, job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(jp); !os.IsNotExist(err) {
+		t.Fatalf("superseded conflict remains: %v", err)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("superseded conflict staged: %#v", pending)
+	}
+}
+
 func TestHubRemovesAcceptedConflict(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
