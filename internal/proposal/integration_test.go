@@ -385,9 +385,9 @@ func TestIntegrationScenario3And4And5(t *testing.T) {
 
 	cluster.Sync()
 
-	// Verify conflict staged: no one's file is silently overwritten
-	if cluster.Laptop1.Controller.paused["obsidian"] == false || cluster.Laptop2.Controller.paused["obsidian"] == false {
-		t.Fatal("expected both nodes to be paused on conflict")
+	// Laptop-1 is accepted as server latest; laptop-2 keeps its dirty edit paused for resolution.
+	if cluster.Laptop2.Controller.paused["obsidian"] == false {
+		t.Fatal("expected laptop-2 to be paused on conflict")
 	}
 
 	bs1, _ := os.ReadFile(filepath.Join(cluster.Laptop1.Root, "conflict.md"))
@@ -400,14 +400,12 @@ func TestIntegrationScenario3And4And5(t *testing.T) {
 		t.Fatalf("laptop-2 content overwritten: %s", bs2)
 	}
 
-	// Scenario 4: L on laptop-1 publishes laptop-1 content
-	// Resolve local on laptop-1
-	_, err := cluster.Laptop1.Store.Resolve(context.Background(), "obsidian", "conflict.md", "local")
+	// Scenario 4: R on laptop-2 keeps the hub content from laptop-1.
+	_, err := cluster.Laptop2.Store.Resolve(context.Background(), "obsidian", "conflict.md", "remote")
 	if err != nil {
-		t.Fatalf("laptop-1 resolve local failed: %v", err)
+		t.Fatalf("laptop-2 resolve remote failed: %v", err)
 	}
-	// Submit resolution proposal
-	_ = proposal.SubmitContent(context.Background(), cluster.Laptop1.ProposalDir, "obsidian", "laptop-1", cluster.Laptop1.Store, "conflict.md", "laptop-1 edit", true)
+	_ = proposal.SubmitContent(context.Background(), cluster.Laptop2.ProposalDir, "obsidian", "laptop-2", cluster.Laptop2.Store, "conflict.md", "laptop-1 edit", true)
 
 	cluster.Sync()
 
@@ -440,13 +438,13 @@ func TestIntegrationScenario6(t *testing.T) {
 
 	cluster.Sync()
 
-	// Resolve remote (keep hub) on laptop-1
-	_, err := cluster.Laptop1.Store.Resolve(context.Background(), "obsidian", "r_test.md", "remote")
+	// Resolve remote (keep hub) on conflicted laptop-2
+	_, err := cluster.Laptop2.Store.Resolve(context.Background(), "obsidian", "r_test.md", "remote")
 	if err != nil {
 		t.Fatalf("resolve remote failed: %v", err)
 	}
 	// Submit resolution proposal
-	_ = proposal.SubmitContent(context.Background(), cluster.Laptop1.ProposalDir, "obsidian", "laptop-1", cluster.Laptop1.Store, "r_test.md", "base version", true)
+	_ = proposal.SubmitContent(context.Background(), cluster.Laptop2.ProposalDir, "obsidian", "laptop-2", cluster.Laptop2.Store, "r_test.md", "laptop-1 edit", true)
 
 	cluster.Sync()
 
@@ -455,7 +453,7 @@ func TestIntegrationScenario6(t *testing.T) {
 	bs2, _ := os.ReadFile(filepath.Join(cluster.Laptop2.Root, "r_test.md"))
 	bsS, _ := os.ReadFile(filepath.Join(cluster.Server.Root, "r_test.md"))
 
-	if string(bs1) != "base version" || string(bs2) != "base version" || string(bsS) != "base version" {
+	if string(bs1) != "laptop-1 edit" || string(bs2) != "laptop-1 edit" || string(bsS) != "laptop-1 edit" {
 		t.Fatalf("R did not sync hub version: l1=%s, l2=%s, server=%s", bs1, bs2, bsS)
 	}
 }
@@ -544,12 +542,12 @@ func TestIntegrationScenario10And11And12And13And14(t *testing.T) {
 
 	cluster.Sync()
 
-	// Resolve on Laptop-1
-	_, err := cluster.Laptop1.Store.Resolve(context.Background(), "obsidian", "gc.md", "local")
+	// Resolve on conflicted Laptop-2 by keeping hub/server.
+	_, err := cluster.Laptop2.Store.Resolve(context.Background(), "obsidian", "gc.md", "remote")
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
-	_ = proposal.SubmitContent(context.Background(), cluster.Laptop1.ProposalDir, "obsidian", "laptop-1", cluster.Laptop1.Store, "gc.md", "laptop-1", true)
+	_ = proposal.SubmitContent(context.Background(), cluster.Laptop2.ProposalDir, "obsidian", "laptop-2", cluster.Laptop2.Store, "gc.md", "laptop-1", true)
 
 	// Sync several times to ensure all nodes process it
 	cluster.Sync()
@@ -635,9 +633,6 @@ func TestIntegrationDeleteVsEditConflictResolvesDelete(t *testing.T) {
 
 	cluster.Sync()
 
-	if !cluster.Laptop1.Controller.paused["obsidian"] || !cluster.Laptop2.Controller.paused["obsidian"] {
-		t.Fatal("expected delete/edit conflict to pause both laptops")
-	}
 	if _, err := os.Stat(filepath.Join(cluster.Laptop1.Root, "delete-conflict.md")); !os.IsNotExist(err) {
 		t.Fatalf("delete side recreated canonical before resolution: %v", err)
 	}
@@ -648,11 +643,16 @@ func TestIntegrationDeleteVsEditConflictResolvesDelete(t *testing.T) {
 	if string(bs2) != "laptop-2 edit" {
 		t.Fatalf("edit side overwritten before resolution: %q", bs2)
 	}
-
-	if _, err := cluster.Laptop1.Store.Resolve(context.Background(), "obsidian", "delete-conflict.md", "delete"); err != nil {
+	conflicts, err := proposal.GlobalConflicts(cluster.Laptop2.ProposalDir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := proposal.SubmitDeleteResolved(context.Background(), cluster.Laptop1.ProposalDir, "obsidian", "laptop-1", cluster.Laptop1.Store, "delete-conflict.md"); err != nil {
+	if len(conflicts) == 0 {
+		t.Fatal("delete/edit conflict not visible in shared conflict queue")
+	}
+
+	_ = os.Remove(filepath.Join(cluster.Laptop2.Root, "delete-conflict.md"))
+	if err := proposal.SubmitDeleteResolved(context.Background(), cluster.Laptop2.ProposalDir, "obsidian", "laptop-2", cluster.Laptop2.Store, "delete-conflict.md"); err != nil {
 		t.Fatal(err)
 	}
 

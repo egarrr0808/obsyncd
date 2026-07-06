@@ -456,9 +456,6 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 			log.Printf("OBSYNCD HUB: confirmed delete %s from %s", p.Path, short(p.Device))
 			return nil
 		}
-		if !p.Resolve && serverHash == p.BaseHash && !serverMissing && (h.hasCompetingProposal(p) || pathHasConflict) {
-			return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
-		}
 		if serverMissing {
 			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
 				return err
@@ -496,13 +493,6 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
 	}
 
-	pathHasConflict := h.hasConflictForPath(p.Path)
-	if serverMissing && p.BaseHash == "" && !h.hasCompetingProposal(p) {
-		pathHasConflict = false
-	}
-	if !p.Resolve && serverHash != p.ContentHash && serverHash == p.BaseHash && (h.hasCompetingProposal(p) || pathHasConflict) {
-		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
-	}
 	if serverHash == p.ContentHash {
 		if err := h.Store.SaveBase(ctx, h.Folder, p.Path, p.Content); err != nil {
 			return err
@@ -696,17 +686,40 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+	local, localErr := os.ReadFile(canonical)
+	localMissing := os.IsNotExist(localErr)
+	if localErr != nil && !localMissing {
+		return localErr
+	}
+	if !ack.Delete && c.hasDirtyLocal(ctx, ack.Path, local, localMissing, ack.ContentHash) {
+		log.Printf("OBSYNCD HOLD: %s has local edit; server update waits for obsyncctl", ack.Path)
+		if c.Controller != nil {
+			_ = c.Controller.Pause(ctx, c.Folder)
+		}
+		return nil
+	}
 	if ack.Delete {
+		if !localMissing && c.localDiffersFromBase(ctx, ack.Path, local) {
+			log.Printf("OBSYNCD HOLD: %s exists locally; server delete waits for obsyncctl", ack.Path)
+			if c.Controller != nil {
+				_ = c.Controller.Pause(ctx, c.Folder)
+			}
+			return nil
+		}
+		if c.hasDirtyLocal(ctx, ack.Path, local, localMissing, "") {
+			log.Printf("OBSYNCD HOLD: %s has local edit; server delete waits for obsyncctl", ack.Path)
+			if c.Controller != nil {
+				_ = c.Controller.Pause(ctx, c.Folder)
+			}
+			return nil
+		}
 		_ = os.Remove(canonical)
 		if err := c.Store.DeleteBase(ctx, c.Folder, ack.Path); err != nil {
 			return err
 		}
 	} else {
-		bs, err := os.ReadFile(canonical)
-		if err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		if hashBytes(bs) != ack.ContentHash {
+		bs := local
+		if hashBytes(local) != ack.ContentHash {
 			if err := atomicWrite(canonical, []byte(ack.Content), 0o644); err != nil {
 				return err
 			}
@@ -735,14 +748,68 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	return nil
 }
 
+func (c ConflictIngest) hasDirtyLocal(ctx context.Context, rel string, local []byte, localMissing bool, ackHash string) bool {
+	if ackHash != "" && !localMissing && hashBytes(local) == ackHash {
+		return false
+	}
+	if c.hasInboundConflict(rel) {
+		return true
+	}
+	if !localMissing {
+		if base, ok, err := c.Store.Base(ctx, c.Folder, rel); err == nil && ok {
+			if hashString(base) != hashBytes(local) {
+				return true
+			}
+		}
+	}
+	if pending, err := c.Store.HasPending(ctx, c.Folder, rel); err == nil && pending {
+		return true
+	}
+	paths, err := LocalPending(c.ProposalDir, c.DeviceID)
+	if err != nil {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	for _, path := range paths {
+		if filepath.ToSlash(filepath.Clean(path)) == clean {
+			return true
+		}
+	}
+	return false
+}
+
+func (c ConflictIngest) localDiffersFromBase(ctx context.Context, rel string, local []byte) bool {
+	base, ok, err := c.Store.Base(ctx, c.Folder, rel)
+	if err != nil || !ok {
+		return len(local) > 0
+	}
+	return hashString(base) != hashBytes(local)
+}
+
+func (c ConflictIngest) hasInboundConflict(rel string) bool {
+	entries, err := os.ReadDir(c.ProposalDir)
+	if err != nil {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		var job Conflict
+		if err := readJSON(filepath.Join(c.ProposalDir, entry.Name()), &job); err != nil || job.Type != "conflict" {
+			continue
+		}
+		if job.TargetDevice == c.DeviceID && filepath.ToSlash(filepath.Clean(job.Path)) == clean {
+			return true
+		}
+	}
+	return false
+}
+
 func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict) error {
 	if pending, err := c.Store.HasPending(ctx, c.Folder, job.Path); err != nil || pending {
 		return err
-	}
-	if base, ok, err := c.Store.Base(ctx, c.Folder, job.Path); err != nil {
-		return err
-	} else if ok && job.ServerHash != "" && hashString(base) != job.ServerHash {
-		return nil
 	}
 	canonical, err := safeJoin(c.Root, job.Path)
 	if err != nil {
@@ -789,6 +856,7 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 		_ = os.Remove(tmpName)
 		return stageErr
 	}
+	c.removeAcceptedForPath(job.Path)
 	if err := c.Store.SaveBase(ctx, c.Folder, job.Path, job.ServerContent); err != nil {
 		return err
 	}
@@ -797,6 +865,27 @@ func (c ConflictIngest) handle(ctx context.Context, jobPath string, job Conflict
 	}
 	log.Printf("OBSYNCD CONFLICT: %s differs from hub; run obsyncctl", job.Path)
 	return nil
+}
+
+func (c ConflictIngest) removeAcceptedForPath(rel string) {
+	entries, err := os.ReadDir(c.ProposalDir)
+	if err != nil {
+		return
+	}
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "accepted-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(c.ProposalDir, entry.Name())
+		var ack Accepted
+		if err := readJSON(path, &ack); err != nil || ack.Type != "accepted" || ack.TargetDevice != c.DeviceID {
+			continue
+		}
+		if filepath.ToSlash(filepath.Clean(ack.Path)) == clean {
+			_ = os.Remove(path)
+		}
+	}
 }
 
 func (h Hub) removeConflicts(ctx context.Context, rel string) {

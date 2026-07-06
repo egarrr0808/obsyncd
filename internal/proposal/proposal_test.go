@@ -127,7 +127,7 @@ func TestHubConflictsStaleProposal(t *testing.T) {
 	}
 }
 
-func TestHubConflictsSameBaseCompetingProposals(t *testing.T) {
+func TestHubAcceptsFirstProposalThenConflictsSecond(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("base\n"), 0o644); err != nil {
@@ -165,13 +165,14 @@ func TestHubConflictsSameBaseCompetingProposals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "base\n" {
+	if string(got) != "one\n" {
 		t.Fatalf("hub file changed: %q", got)
 	}
-	for _, name := range []string{"conflict-first.json", "conflict-second.json"} {
-		if _, err := os.Stat(filepath.Join(proposals, name)); err != nil {
-			t.Fatalf("%s missing: %v", name, err)
-		}
+	if _, err := os.Stat(filepath.Join(proposals, "proposal-first.json")); !os.IsNotExist(err) {
+		t.Fatalf("first proposal remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-second.json")); err != nil {
+		t.Fatalf("second conflict missing: %v", err)
 	}
 }
 
@@ -302,7 +303,7 @@ func TestAcceptedRemovesOriginalProposal(t *testing.T) {
 	}
 }
 
-func TestAcceptedAppliesResolutionToDivergentLocalFile(t *testing.T) {
+func TestAcceptedWaitsForDivergentLocalFile(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
 	store := statestore.New(root)
@@ -333,15 +334,15 @@ func TestAcceptedAppliesResolutionToDivergentLocalFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "resolved\n" {
+	if string(got) != "local\n" {
 		t.Fatalf("content = %q", got)
 	}
 	pending, err := store.Pending(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pending) != 0 {
-		t.Fatalf("pending remains: %#v", pending)
+	if len(pending) == 0 {
+		t.Fatal("pending conflict was cleared")
 	}
 }
 
