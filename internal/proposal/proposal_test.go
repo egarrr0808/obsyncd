@@ -575,10 +575,12 @@ func TestHubRemovesAllConflictsForAcceptedPath(t *testing.T) {
 
 func TestGlobalConflictsListsSharedJobs(t *testing.T) {
 	proposals := t.TempDir()
+	old := time.Date(2026, 7, 6, 15, 0, 0, 0, time.UTC)
+	newer := old.Add(time.Minute)
 	for _, conflict := range []Conflict{
-		{Type: "conflict", ID: "one", TargetDevice: "client-a", Path: "dir/../note.md", ServerContent: "server\n"},
-		{Type: "conflict", ID: "two", TargetDevice: "client-a", Path: "note.md", ServerContent: "server\n"},
-		{Type: "conflict", ID: "three", TargetDevice: "client-b", Path: "note.md", ServerContent: "server\n"},
+		{Type: "conflict", ID: "one", TargetDevice: "client-a", Path: "dir/../note.md", ServerContent: "server\n", ClientContent: "old\n", CreatedAt: old.Format(time.RFC3339Nano)},
+		{Type: "conflict", ID: "two", TargetDevice: "client-a", Path: "note.md", ServerContent: "server\n", ClientContent: "new\n", CreatedAt: newer.Format(time.RFC3339Nano)},
+		{Type: "conflict", ID: "three", TargetDevice: "client-b", Path: "note.md", ServerContent: "server\n", ClientContent: "other\n", CreatedAt: old.Format(time.RFC3339Nano)},
 	} {
 		if err := writeJSON(filepath.Join(proposals, "conflict-"+conflict.ID+".json"), conflict); err != nil {
 			t.Fatal(err)
@@ -590,5 +592,10 @@ func TestGlobalConflictsListsSharedJobs(t *testing.T) {
 	}
 	if len(conflicts) != 2 {
 		t.Fatalf("conflicts = %#v", conflicts)
+	}
+	for _, conflict := range conflicts {
+		if conflict.TargetDevice == "client-a" && conflict.ClientContent != "new\n" {
+			t.Fatalf("kept stale conflict: %#v", conflict)
+		}
 	}
 }

@@ -194,7 +194,8 @@ func GlobalConflicts(proposalDir string) ([]Conflict, error) {
 	if err != nil {
 		return nil, err
 	}
-	seen := map[string]struct{}{}
+	byKey := map[string]Conflict{}
+	var order []string
 	var out []Conflict
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
@@ -206,12 +207,18 @@ func GlobalConflicts(proposalDir string) ([]Conflict, error) {
 		}
 		path := filepath.ToSlash(filepath.Clean(c.Path))
 		key := c.TargetDevice + "\x00" + path
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
 		c.Path = path
-		out = append(out, c)
+		if prev, ok := byKey[key]; ok {
+			if c.CreatedAt > prev.CreatedAt {
+				byKey[key] = c
+			}
+		} else {
+			byKey[key] = c
+			order = append(order, key)
+		}
+	}
+	for _, key := range order {
+		out = append(out, byKey[key])
 	}
 	return out, nil
 }
