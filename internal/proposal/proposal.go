@@ -396,7 +396,7 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	if err := validateRel(p.Path); err != nil {
 		return err
 	}
-	if !p.Resolve && !proposalSettled(p) {
+	if !p.Resolve && !proposalFileSettled(proposalPath) {
 		return nil
 	}
 	canonical, err := safeJoin(h.Root, p.Path)
@@ -595,12 +595,12 @@ func (h Hub) acceptTargets(proposer string) []string {
 	return out
 }
 
-func proposalSettled(p Proposal) bool {
-	created, err := time.Parse(time.RFC3339Nano, p.CreatedAt)
+func proposalFileSettled(path string) bool {
+	info, err := os.Stat(path)
 	if err != nil {
 		return true
 	}
-	return time.Since(created) >= SettleDelay
+	return time.Since(info.ModTime()) >= SettleDelay
 }
 
 func (h Hub) hasCompetingProposal(p Proposal) bool {
