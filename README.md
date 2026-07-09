@@ -59,6 +59,8 @@ remote_nodes:
 
 The hub publishes the accepted vault as a send-only Syncthing folder. Clients receive that vault and send edits through the internal `obsyncd-proposals` folder. If the hub sees a stale edit, it creates a conflict job for the client; resolve it with `obsyncctl` on that laptop.
 
+Clients also run a background checker every second. It hashes Markdown files, submits changed files to the hub automatically, and submits deletes for tracked files that disappeared. This is a fallback for missed filesystem events and daemon restarts.
+
 Get a machine's Syncthing device ID:
 
 ```bash

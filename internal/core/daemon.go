@@ -271,6 +271,20 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 				fmt.Fprintln(os.Stderr, err)
 			}
 		}()
+		go func() {
+			if err := (&proposal.Submitter{
+				Root:           appCfg.VaultPath,
+				ProposalDir:    appCfg.ProposalPath,
+				Folder:         appconfig.DefaultFolderID,
+				ProposalFolder: appconfig.ProposalFolderID,
+				DeviceID:       myID.String(),
+				Store:          store,
+				Controller:     controller,
+				Interval:       time.Second,
+			}).Run(ctx); err != nil && ctx.Err() == nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+		}()
 		conflictInterceptor := &interceptor.Interceptor{
 			Root:       appCfg.VaultPath,
 			Folder:     appconfig.DefaultFolderID,
