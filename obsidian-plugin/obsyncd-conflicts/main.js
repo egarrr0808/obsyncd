@@ -13,6 +13,7 @@ const MARK_END = "%%OBSYNCD_CONFLICT_END%%";
 
 const DEFAULT_SETTINGS = {
   enabled: true,
+  autoOpenReview: true,
   backgroundCheckEnabled: true,
   configPath: path.join(os.homedir(), ".config", "obsyncd", "config.yaml"),
   proposalDir: "",
@@ -21,6 +22,7 @@ const DEFAULT_SETTINGS = {
 module.exports = class ObsyncdConflictsPlugin extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.refreshTimer = null;
     this.writeControlFile();
 
     this.registerView(VIEW_TYPE, (leaf) => new ConflictReviewView(leaf, this));
@@ -38,6 +40,16 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
         if (!checking) this.openCurrentConflictReview();
         return true;
       },
+    });
+
+    this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      this.scheduleAutoReview(file);
+    }));
+    this.registerInterval(window.setInterval(() => {
+      this.scheduleAutoReview(this.activeMarkdownFile(), true);
+    }, 3000));
+    this.app.workspace.onLayoutReady(() => {
+      this.scheduleAutoReview(this.activeMarkdownFile());
     });
 
     this.addSettingTab(new ObsyncdConflictSettingsTab(this.app, this));
@@ -69,7 +81,46 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
       new Notice("obsyncd: no conflict versions found for this note.");
     }
 
-    const leaf = this.app.workspace.getLeaf("split", "vertical");
+    await this.openReview(file, localContent, versions, true);
+  }
+
+  scheduleAutoReview(file, quiet = false) {
+    if (this.refreshTimer) window.clearTimeout(this.refreshTimer);
+    this.refreshTimer = window.setTimeout(() => {
+      this.autoReview(file, quiet);
+    }, 150);
+  }
+
+  async autoReview(file, quiet = false) {
+    if (!this.settings.enabled || !this.settings.autoOpenReview) {
+      this.closeReview();
+      return;
+    }
+    if (!file || file.extension !== "md") {
+      this.closeReview();
+      return;
+    }
+    let localContent = "";
+    try {
+      localContent = await this.app.vault.cachedRead(file);
+    } catch (_) {
+      this.closeReview();
+      return;
+    }
+    const versions = await this.loadVersions(file.path, localContent);
+    if (versions.length === 0) {
+      this.closeReview();
+      return;
+    }
+    if (!quiet) {
+      new Notice(`obsyncd: alternate version found for ${file.basename}.`);
+    }
+    await this.openReview(file, localContent, versions, false);
+  }
+
+  async openReview(file, localContent, versions, reveal) {
+    const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+    const leaf = existing || this.app.workspace.getLeaf("split", "vertical");
     await leaf.setViewState({
       type: VIEW_TYPE,
       active: true,
@@ -79,7 +130,13 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
         versions,
       },
     });
-    this.app.workspace.revealLeaf(leaf);
+    if (reveal) this.app.workspace.revealLeaf(leaf);
+  }
+
+  closeReview() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      leaf.detach();
+    }
   }
 
   async loadVersions(relPath, localContent) {
@@ -264,6 +321,18 @@ class ObsyncdConflictSettingsTab extends PluginSettingTab {
         .onChange(async (value) => {
           this.plugin.settings.enabled = value;
           await this.plugin.saveSettings();
+          this.plugin.scheduleAutoReview(this.plugin.activeMarkdownFile());
+        }));
+
+    new Setting(containerEl)
+      .setName("Open review beside conflicted notes")
+      .setDesc("When enabled, opening a note with obsyncd alternate versions automatically opens the side-by-side review pane.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.autoOpenReview)
+        .onChange(async (value) => {
+          this.plugin.settings.autoOpenReview = value;
+          await this.plugin.saveSettings();
+          this.plugin.scheduleAutoReview(this.plugin.activeMarkdownFile());
         }));
 
     new Setting(containerEl)
