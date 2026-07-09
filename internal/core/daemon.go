@@ -236,16 +236,6 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 			}
 		}()
 	} else {
-		go func() {
-			if err := (eventloop.BaseCapture{
-				Logger: evLogger,
-				Folder: appconfig.DefaultFolderID,
-				Root:   appCfg.VaultPath,
-				Store:  store,
-			}).Run(ctx); err != nil && ctx.Err() == nil {
-				fmt.Fprintln(os.Stderr, err)
-			}
-		}()
 		conflictGuard := &guard.Guard{
 			Root:           appCfg.VaultPath,
 			StateDir:       paths.StateDir,
