@@ -12,6 +12,8 @@ const MARK_REMOTE_END = "%%OBSYNCD_REMOTE_END%%";
 const MARK_END = "%%OBSYNCD_CONFLICT_END%%";
 
 const DEFAULT_SETTINGS = {
+  enabled: true,
+  backgroundCheckEnabled: true,
   configPath: path.join(os.homedir(), ".config", "obsyncd", "config.yaml"),
   proposalDir: "",
 };
@@ -19,6 +21,7 @@ const DEFAULT_SETTINGS = {
 module.exports = class ObsyncdConflictsPlugin extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    this.writeControlFile();
 
     this.registerView(VIEW_TYPE, (leaf) => new ConflictReviewView(leaf, this));
 
@@ -50,6 +53,10 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
   }
 
   async openCurrentConflictReview() {
+    if (!this.settings.enabled) {
+      new Notice("obsyncd: plugin is disabled in settings.");
+      return;
+    }
     const file = this.activeMarkdownFile();
     if (!file) {
       new Notice("obsyncd: open a Markdown note first.");
@@ -127,6 +134,35 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
       return expandHome(this.settings.proposalDir.trim());
     }
     return path.join(path.dirname(expandHome(this.settings.configPath)), "state", "proposals");
+  }
+
+  stateDir() {
+    return path.join(path.dirname(expandHome(this.settings.configPath)), "state");
+  }
+
+  controlPath() {
+    return path.join(this.stateDir(), "control.json");
+  }
+
+  effectiveBackgroundCheckEnabled() {
+    return !!this.settings.enabled && !!this.settings.backgroundCheckEnabled;
+  }
+
+  writeControlFile() {
+    const control = {
+      background_check_enabled: this.effectiveBackgroundCheckEnabled(),
+    };
+    try {
+      fs.mkdirSync(this.stateDir(), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(this.controlPath(), `${JSON.stringify(control, null, 2)}\n`, { mode: 0o600 });
+    } catch (error) {
+      new Notice(`obsyncd: failed to write control file: ${error.message}`);
+    }
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
+    this.writeControlFile();
   }
 };
 
@@ -221,6 +257,26 @@ class ObsyncdConflictSettingsTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "obsyncd Conflicts" });
 
     new Setting(containerEl)
+      .setName("Enable obsyncd plugin")
+      .setDesc("Turns the viewer and daemon background checker on or off from Obsidian.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.enabled)
+        .onChange(async (value) => {
+          this.plugin.settings.enabled = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
+      .setName("Enable background file checker")
+      .setDesc("When enabled, obsyncd scans Markdown changes and sends proposals to the hub automatically.")
+      .addToggle((toggle) => toggle
+        .setValue(this.plugin.settings.backgroundCheckEnabled)
+        .onChange(async (value) => {
+          this.plugin.settings.backgroundCheckEnabled = value;
+          await this.plugin.saveSettings();
+        }));
+
+    new Setting(containerEl)
       .setName("obsyncd config path")
       .setDesc("Used to infer the proposal directory when the field below is empty.")
       .addText((text) => text
@@ -228,7 +284,7 @@ class ObsyncdConflictSettingsTab extends PluginSettingTab {
         .setValue(this.plugin.settings.configPath)
         .onChange(async (value) => {
           this.plugin.settings.configPath = value;
-          await this.plugin.saveData(this.plugin.settings);
+          await this.plugin.saveSettings();
         }));
 
     new Setting(containerEl)
@@ -239,8 +295,13 @@ class ObsyncdConflictSettingsTab extends PluginSettingTab {
         .setValue(this.plugin.settings.proposalDir)
         .onChange(async (value) => {
           this.plugin.settings.proposalDir = value;
-          await this.plugin.saveData(this.plugin.settings);
+          await this.plugin.saveSettings();
         }));
+
+    containerEl.createEl("p", {
+      text: `Control file: ${this.plugin.controlPath()}`,
+      cls: "setting-item-description",
+    });
   }
 }
 

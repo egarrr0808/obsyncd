@@ -9,6 +9,7 @@ Read-only conflict viewer for obsyncd.
 - Supports any number of conflict versions for the same note.
 - Highlights lines in alternate versions that differ from the local note.
 - Also understands old embedded `%%OBSYNCD_CONFLICT_START%%` marker blocks.
+- Lets you enable/disable the viewer and obsyncd background checker from plugin settings.
 
 This first slice does not resolve conflicts or write files.
 
@@ -35,3 +36,13 @@ By default it reads:
 ```
 
 You can override this in the plugin settings.
+
+## Background checker switch
+
+The plugin writes:
+
+```text
+~/.config/obsyncd/state/control.json
+```
+
+`obsyncd` reads that file every scan cycle. When `background_check_enabled` is `false`, the daemon stops auto-submitting Markdown changes until the setting is enabled again.

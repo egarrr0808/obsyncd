@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -281,6 +282,7 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 				Store:          store,
 				Controller:     controller,
 				Interval:       time.Second,
+				Enabled:        backgroundCheckEnabled(paths.StateDir),
 			}).Run(ctx); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, err)
 			}
@@ -341,6 +343,30 @@ func Start(ctx context.Context, configFile string) (*Daemon, error) {
 		loggerCancel()
 	}()
 	return d, nil
+}
+
+type controlFile struct {
+	BackgroundCheckEnabled *bool `json:"background_check_enabled"`
+}
+
+func backgroundCheckEnabled(stateDir string) func() bool {
+	return func() bool {
+		bs, err := os.ReadFile(filepath.Join(stateDir, "control.json"))
+		if os.IsNotExist(err) {
+			return true
+		}
+		if err != nil {
+			return true
+		}
+		var control controlFile
+		if err := json.Unmarshal(bs, &control); err != nil {
+			return true
+		}
+		if control.BackgroundCheckEnabled == nil {
+			return true
+		}
+		return *control.BackgroundCheckEnabled
+	}
 }
 
 func (d *Daemon) Wait() error {

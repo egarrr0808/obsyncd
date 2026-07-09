@@ -86,6 +86,7 @@ type Submitter struct {
 	Store          Store
 	Controller     Controller
 	Interval       time.Duration
+	Enabled        func() bool
 }
 
 type Hub struct {
@@ -121,6 +122,9 @@ func (s *Submitter) Run(ctx context.Context) error {
 }
 
 func (s *Submitter) Scan(ctx context.Context) error {
+	if s.Enabled != nil && !s.Enabled() {
+		return nil
+	}
 	cleanupTransportFiles(s.ProposalDir)
 
 	tracked, err := s.Store.TrackedPaths()
