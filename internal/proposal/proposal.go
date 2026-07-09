@@ -327,6 +327,31 @@ func GlobalConflicts(proposalDir string) ([]Conflict, error) {
 	return out, nil
 }
 
+func RemoveConflictsForPath(proposalDir, rel string) error {
+	entries, err := os.ReadDir(proposalDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(proposalDir, entry.Name())
+		var c Conflict
+		if err := readJSON(path, &c); err != nil || c.Type != "conflict" {
+			continue
+		}
+		if filepath.ToSlash(filepath.Clean(c.Path)) == clean {
+			_ = os.Remove(path)
+		}
+	}
+	return nil
+}
+
 func LocalPending(proposalDir, deviceID string) ([]string, error) {
 	entries, err := os.ReadDir(proposalDir)
 	if os.IsNotExist(err) {
@@ -893,27 +918,8 @@ func (c ConflictIngest) removeAcceptedForPath(rel string) {
 }
 
 func (h Hub) removeConflicts(ctx context.Context, rel string) {
-	entries, err := os.ReadDir(h.ProposalDir)
-	if err != nil {
-		return
-	}
-	var removed []string
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasPrefix(entry.Name(), "conflict-") || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		path := filepath.Join(h.ProposalDir, entry.Name())
-		var c Conflict
-		if err := readJSON(path, &c); err != nil {
-			continue
-		}
-		if c.Path == rel {
-			_ = os.Remove(path)
-			removed = append(removed, entry.Name())
-		}
-	}
-	if len(removed) > 0 && h.Controller != nil {
-		_ = h.Controller.Rescan(ctx, h.ProposalFolder, removed)
+	if err := RemoveConflictsForPath(h.ProposalDir, rel); err == nil && h.Controller != nil {
+		_ = h.Controller.Rescan(ctx, h.ProposalFolder, nil)
 	}
 }
 

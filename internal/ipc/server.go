@@ -266,7 +266,12 @@ func (s *Server) ResolveGlobal(args ResolveArgs, reply *ResolveReply) error {
 				return err
 			}
 		}
+		_ = s.store.ClearPending(context.Background(), s.folderID, rel)
+		_ = proposal.RemoveConflictsForPath(s.proposals, rel)
 		s.scanProposalsAsync()
+		if pending := s.pendingConflicts(); len(pending) == 0 && len(s.localPending()) == 0 {
+			_ = s.setPaused(false)
+		}
 	}
 	*reply = ResolveReply{Path: rel, OK: true}
 	return nil
