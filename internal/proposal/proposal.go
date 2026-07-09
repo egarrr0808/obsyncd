@@ -412,6 +412,14 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 	if !serverMissing {
 		serverHash = hashBytes(server)
 	}
+	baseHash := ""
+	baseKnown := false
+	if base, ok, err := h.Store.Base(ctx, h.Folder, p.Path); err != nil {
+		return err
+	} else if ok {
+		baseKnown = true
+		baseHash = hashString(base)
+	}
 	if p.Resolve {
 		if p.Delete {
 			_ = os.Remove(canonical)
@@ -442,6 +450,9 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		return nil
 	}
 
+	if baseKnown && p.BaseHash != baseHash {
+		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
+	}
 	if p.Delete {
 		pathHasConflict := h.hasConflictForPath(p.Path)
 		if !p.Resolve && serverMissing && !h.hasCompetingProposal(p) && !pathHasConflict {

@@ -176,6 +176,44 @@ func TestHubAcceptsFirstProposalThenConflictsSecond(t *testing.T) {
 	}
 }
 
+func TestHubConflictsStaleProposalEvenWhenServerFileMatches(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveBase(context.Background(), "obsidian", "note.md", "one\n"); err != nil {
+		t.Fatal(err)
+	}
+	hub := Hub{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "hub", Store: store, Controller: fakeController{},
+	}
+	p := Proposal{
+		Type: "proposal", ID: "stale-matching-server", Device: "client-b", Path: "note.md",
+		BaseHash: hashString("base\n"), ContentHash: hashString("two\n"), Content: "two\n",
+		CreatedAt: time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+	}
+	pp := filepath.Join(proposals, "proposal-stale-matching-server.json")
+	if err := writeJSON(pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.handle(context.Background(), pp, p); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-stale-matching-server.json")); err != nil {
+		t.Fatalf("conflict missing: %v", err)
+	}
+	base, ok, err := store.Base(context.Background(), "obsidian", "note.md")
+	if err != nil || !ok {
+		t.Fatalf("base missing: %v", err)
+	}
+	if base != "one\n" {
+		t.Fatalf("stale proposal updated base: %q", base)
+	}
+}
+
 func TestHubConfirmsAlreadyMatchingProposal(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
