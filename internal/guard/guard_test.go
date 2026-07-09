@@ -325,7 +325,7 @@ func TestSnapshotLocalWaitsForArrivingBase(t *testing.T) {
 	}
 }
 
-func TestSnapshotLocalSavesMissingBaseInsteadOfSubmitting(t *testing.T) {
+func TestSnapshotLocalSubmitsMissingBase(t *testing.T) {
 	root := t.TempDir()
 	state := t.TempDir()
 	path := filepath.Join(root, "note.md")
@@ -341,14 +341,14 @@ func TestSnapshotLocalSavesMissingBaseInsteadOfSubmitting(t *testing.T) {
 	if err := g.snapshotLocal(context.Background(), "note.md"); err != nil {
 		t.Fatal(err)
 	}
-	if ctrl.pauses != 0 {
-		t.Fatalf("paused for missing base")
+	if ctrl.pauses != 1 {
+		t.Fatalf("pauses = %d", ctrl.pauses)
 	}
-	if stager.bases["note.md"] != "base\n" {
-		t.Fatalf("base = %q", stager.bases["note.md"])
+	if stager.bases["note.md"] != "" {
+		t.Fatalf("base saved = %q", stager.bases["note.md"])
 	}
-	if _, err := os.Stat(g.snapshotPath("note.md")); !os.IsNotExist(err) {
-		t.Fatalf("missing base created snapshot: %v", err)
+	if _, err := os.Stat(g.snapshotPath("note.md")); err != nil {
+		t.Fatalf("snapshot missing: %v", err)
 	}
 }
 
