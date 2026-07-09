@@ -1,0 +1,9 @@
+{
+  "id": "obsyncd-conflicts",
+  "name": "obsyncd Conflicts",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Shows obsyncd conflict versions beside the local note with simple line highlighting.",
+  "author": "obsyncd",
+  "isDesktopOnly": true
+}

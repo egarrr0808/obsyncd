@@ -1,0 +1,103 @@
+.obsyncd-review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 12px;
+}
+
+.obsyncd-review__header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  padding-bottom: 8px;
+}
+
+.obsyncd-review__title {
+  font-weight: 700;
+  color: var(--text-normal);
+}
+
+.obsyncd-review__message {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.obsyncd-review__grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.obsyncd-review__pane {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-primary);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.obsyncd-review__pane-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-weight: 700;
+}
+
+.obsyncd-review__pane-subtitle {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: var(--font-ui-smaller);
+}
+
+.obsyncd-review__code {
+  margin: 0;
+  padding: 8px 0;
+  max-height: calc(100vh - 220px);
+  overflow: auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-smaller);
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.obsyncd-review__line {
+  display: block;
+  padding: 0 10px;
+  border-left: 3px solid transparent;
+  min-height: 1.45em;
+}
+
+.obsyncd-review__line--changed {
+  background: rgba(var(--color-orange-rgb), 0.16);
+  border-left-color: var(--color-orange);
+}
+
+.obsyncd-review__line--added {
+  background: rgba(var(--color-green-rgb), 0.14);
+  border-left-color: var(--color-green);
+}
+
+.obsyncd-review__line--deleted {
+  background: rgba(var(--color-red-rgb), 0.14);
+  border-left-color: var(--color-red);
+}
+
+.obsyncd-review__empty {
+  color: var(--text-muted);
+  padding: 24px;
+}
+
+@media (max-width: 900px) {
+  .obsyncd-review__grid {
+    grid-template-columns: 1fr;
+  }
+}
