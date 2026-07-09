@@ -23,6 +23,7 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
   async onload() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.refreshTimer = null;
+    this.lastMarkdownFile = null;
     this.writeControlFile();
 
     this.registerView(VIEW_TYPE, (leaf) => new ConflictReviewView(leaf, this));
@@ -43,10 +44,14 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
     });
 
     this.registerEvent(this.app.workspace.on("file-open", (file) => {
+      if (file && file.extension !== "md") {
+        this.closeReview();
+        return;
+      }
       this.scheduleAutoReview(file);
     }));
     this.registerInterval(window.setInterval(() => {
-      this.scheduleAutoReview(this.activeMarkdownFile(), true);
+      this.scheduleAutoReview(this.activeMarkdownFile() || this.lastMarkdownFile, true);
     }, 3000));
     this.app.workspace.onLayoutReady(() => {
       this.scheduleAutoReview(this.activeMarkdownFile());
@@ -97,9 +102,9 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
       return;
     }
     if (!file || file.extension !== "md") {
-      this.closeReview();
       return;
     }
+    this.lastMarkdownFile = file;
     let localContent = "";
     try {
       localContent = await this.app.vault.cachedRead(file);
