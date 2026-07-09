@@ -176,7 +176,7 @@ func TestHubAcceptsFirstProposalThenConflictsSecond(t *testing.T) {
 	}
 }
 
-func TestHubConflictsStaleProposalEvenWhenServerFileMatches(t *testing.T) {
+func TestHubConfirmsStaleProposalWhenServerFileAlreadyMatches(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()
 	store := statestore.New(root)
@@ -202,15 +202,18 @@ func TestHubConflictsStaleProposalEvenWhenServerFileMatches(t *testing.T) {
 	if err := hub.handle(context.Background(), pp, p); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(proposals, "conflict-stale-matching-server.json")); err != nil {
-		t.Fatalf("conflict missing: %v", err)
+	if _, err := os.Stat(filepath.Join(proposals, "conflict-stale-matching-server.json")); !os.IsNotExist(err) {
+		t.Fatalf("conflict created for matching content: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(proposals, "proposal-stale-matching-server.json")); !os.IsNotExist(err) {
+		t.Fatalf("proposal remains after confirm: %v", err)
 	}
 	base, ok, err := store.Base(context.Background(), "obsidian", "note.md")
 	if err != nil || !ok {
 		t.Fatalf("base missing: %v", err)
 	}
-	if base != "one\n" {
-		t.Fatalf("stale proposal updated base: %q", base)
+	if base != "two\n" {
+		t.Fatalf("base not updated to matching server content: %q", base)
 	}
 }
 

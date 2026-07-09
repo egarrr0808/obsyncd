@@ -472,12 +472,8 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		return nil
 	}
 
-	if baseKnown && p.BaseHash != baseHash {
-		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
-	}
 	if p.Delete {
-		pathHasConflict := h.hasConflictForPath(p.Path)
-		if !p.Resolve && serverMissing && !h.hasCompetingProposal(p) && !pathHasConflict {
+		if serverMissing {
 			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
 				return err
 			}
@@ -493,7 +489,11 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 			log.Printf("OBSYNCD HUB: confirmed delete %s from %s", p.Path, short(p.Device))
 			return nil
 		}
-		if serverMissing {
+		if baseKnown && p.BaseHash != baseHash {
+			return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
+		}
+		pathHasConflict := h.hasConflictForPath(p.Path)
+		if !p.Resolve && serverMissing && !h.hasCompetingProposal(p) && !pathHasConflict {
 			if err := h.Store.DeleteBase(ctx, h.Folder, p.Path); err != nil {
 				return err
 			}
@@ -545,6 +545,9 @@ func (h Hub) handle(ctx context.Context, proposalPath string, p Proposal) error 
 		h.removeConflicts(ctx, p.Path)
 		log.Printf("OBSYNCD HUB: confirmed %s from %s", p.Path, short(p.Device))
 		return nil
+	}
+	if baseKnown && p.BaseHash != baseHash {
+		return h.writeConflict(ctx, proposalPath, p, serverHash, string(server))
 	}
 	if serverHash == p.BaseHash {
 		if err := atomicWrite(canonical, []byte(p.Content), 0o644); err != nil {
