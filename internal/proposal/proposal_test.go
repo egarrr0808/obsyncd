@@ -387,6 +387,49 @@ func TestAcceptedWaitsForDivergentLocalFile(t *testing.T) {
 	}
 }
 
+func TestAcceptedAppliesWhenItMatchesPendingHubSide(t *testing.T) {
+	root := t.TempDir()
+	proposals := t.TempDir()
+	store := statestore.New(root)
+	if err := os.WriteFile(filepath.Join(root, "note.md"), []byte("local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pendingArtifact := filepath.Join(root, "server.tmp")
+	if err := os.WriteFile(pendingArtifact, []byte("server\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Stage(context.Background(), "obsidian", "note.md", pendingArtifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSON(filepath.Join(proposals, "accepted-seven.json"), Accepted{
+		Type: "accepted", ID: "seven", TargetDevice: "client", Path: "note.md",
+		ContentHash: hashString("server\n"), Content: "server\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ingest := ConflictIngest{
+		Root: root, ProposalDir: proposals, Folder: "obsidian", ProposalFolder: "obsyncd-proposals",
+		DeviceID: "client", Store: store, Controller: fakeController{},
+	}
+	if err := ingest.handleAccepted(context.Background(), filepath.Join(proposals, "accepted-seven.json")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, "note.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "server\n" {
+		t.Fatalf("content = %q", got)
+	}
+	pending, err := store.Pending(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending remains: %#v", pending)
+	}
+}
+
 func TestAcceptedDoesNotResumeWithOtherPendingConflict(t *testing.T) {
 	root := t.TempDir()
 	proposals := t.TempDir()

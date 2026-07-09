@@ -723,7 +723,8 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	if localErr != nil && !localMissing {
 		return localErr
 	}
-	if !ack.Delete && c.hasDirtyLocal(ctx, ack.Path, local, localMissing, ack.ContentHash) {
+	pendingResolution := c.pendingMatchesAccepted(ctx, ack)
+	if !ack.Delete && !pendingResolution && c.hasDirtyLocal(ctx, ack.Path, local, localMissing, ack.ContentHash) {
 		log.Printf("OBSYNCD HOLD: %s has local edit; server update waits for obsyncctl", ack.Path)
 		if c.Controller != nil {
 			_ = c.Controller.Pause(ctx, c.Folder)
@@ -731,14 +732,14 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 		return nil
 	}
 	if ack.Delete {
-		if !localMissing && c.localDiffersFromBase(ctx, ack.Path, local) {
+		if !pendingResolution && !localMissing && c.localDiffersFromBase(ctx, ack.Path, local) {
 			log.Printf("OBSYNCD HOLD: %s exists locally; server delete waits for obsyncctl", ack.Path)
 			if c.Controller != nil {
 				_ = c.Controller.Pause(ctx, c.Folder)
 			}
 			return nil
 		}
-		if c.hasDirtyLocal(ctx, ack.Path, local, localMissing, "") {
+		if !pendingResolution && c.hasDirtyLocal(ctx, ack.Path, local, localMissing, "") {
 			log.Printf("OBSYNCD HOLD: %s has local edit; server delete waits for obsyncctl", ack.Path)
 			if c.Controller != nil {
 				_ = c.Controller.Pause(ctx, c.Folder)
@@ -778,6 +779,32 @@ func (c ConflictIngest) handleAccepted(ctx context.Context, path string) error {
 	}
 	log.Printf("OBSYNCD ACCEPTED: %s stored by hub", ack.Path)
 	return nil
+}
+
+func (c ConflictIngest) pendingMatchesAccepted(ctx context.Context, ack Accepted) bool {
+	pending, err := c.Store.Pending(ctx)
+	if err != nil {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(ack.Path))
+	for _, p := range pending {
+		if filepath.ToSlash(filepath.Clean(p.Canonical)) != clean {
+			continue
+		}
+		if ack.Delete {
+			return p.RemoteDelete
+		}
+		staged, err := safeJoin(c.Root, filepath.FromSlash(p.Staged))
+		if err != nil {
+			return false
+		}
+		bs, err := os.ReadFile(staged)
+		if err != nil {
+			return false
+		}
+		return hashBytes(bs) == ack.ContentHash
+	}
+	return false
 }
 
 func (c ConflictIngest) hasDirtyLocal(ctx context.Context, rel string, local []byte, localMissing bool, ackHash string) bool {
