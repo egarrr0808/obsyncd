@@ -24,6 +24,7 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     this.refreshTimer = null;
     this.lastMarkdownFile = null;
+    this.reviewStateKey = "";
     this.writeControlFile();
 
     this.registerView(VIEW_TYPE, (leaf) => new ConflictReviewView(leaf, this));
@@ -125,10 +126,15 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
 
   async openReview(file, localContent, versions, reveal) {
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
+    const stateKey = reviewStateKey(file.path, localContent, versions);
+    if (existing && this.reviewStateKey === stateKey) {
+      return;
+    }
+    this.reviewStateKey = stateKey;
     const leaf = existing || this.app.workspace.getLeaf("split", "vertical");
     await leaf.setViewState({
       type: VIEW_TYPE,
-      active: true,
+      active: !!reveal,
       state: {
         relPath: file.path,
         localContent,
@@ -139,6 +145,7 @@ module.exports = class ObsyncdConflictsPlugin extends Plugin {
   }
 
   closeReview() {
+    this.reviewStateKey = "";
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       leaf.detach();
     }
@@ -464,15 +471,40 @@ function splitLines(content) {
 }
 
 function dedupeVersions(versions) {
-  const seen = new Set();
+  const byContent = new Map();
   const out = [];
   for (const version of versions) {
-    const key = `${version.label}\u0000${version.subtitle}\u0000${version.content}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(version);
+    const key = String(version.content || "");
+    const existing = byContent.get(key);
+    if (existing) {
+      existing.label = mergeText(existing.label, version.label);
+      existing.subtitle = mergeText(existing.subtitle, version.subtitle);
+      continue;
+    }
+    const copy = Object.assign({}, version);
+    byContent.set(key, copy);
+    out.push(copy);
   }
   return out;
+}
+
+function reviewStateKey(relPath, localContent, versions) {
+  return JSON.stringify({
+    relPath,
+    localContent,
+    versions: versions.map((version) => ({
+      label: version.label,
+      subtitle: version.subtitle,
+      content: version.content,
+    })),
+  });
+}
+
+function mergeText(a, b) {
+  if (!a) return b || "";
+  if (!b || a === b) return a;
+  const parts = new Set(String(a).split(" + ").concat(String(b).split(" + ")));
+  return Array.from(parts).filter(Boolean).join(" + ");
 }
 
 function normalizeRel(value) {
